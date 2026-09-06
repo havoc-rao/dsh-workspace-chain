@@ -64,7 +64,7 @@ it('browses project → session → fork and keyboard picks only a visible leaf'
     expect(row).toBeDefined(); act(() => row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))
   }
   expect(element.textContent).not.toContain('原会话')
-  choose('本项目'); expect(element.textContent).toContain('引用 workspace 本身')
+  choose('workspace'); choose('本地项目'); expect(element.textContent).toContain('引用 workspace 本身')
   choose('原会话'); choose('fork · 分支会话')
   act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
   expect(pick).toHaveBeenCalledWith('workspace-chain', 2)
@@ -99,7 +99,7 @@ it('keeps search inside the selected session when that scope has no matches', as
   const listeners = new Set<() => void>()
   const menu = { getSnapshot: () => state, subscribe: (fn: () => void) => { listeners.add(fn); return () => listeners.delete(fn) } } as unknown as ReferenceMenuProps['menu']
   const { element } = mountUi(<ReferenceMenu menu={menu} onPick={() => {}} onDismiss={() => {}} references={() => refs} currentWorkspace={() => 'w1'} />)
-  for (const label of ['本项目', '原会话']) {
+  for (const label of ['workspace', '本地项目', '原会话']) {
     const row = [...element.querySelectorAll('[role="option"]')].find(row => row.textContent?.includes(label))!
     act(() => row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))
   }

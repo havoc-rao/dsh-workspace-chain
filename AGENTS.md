@@ -28,8 +28,10 @@ NODE_ENV=development pnpm build
 ```
 
 - 接入前先运行 `dcf status`，按实际缺失项处理，避免反复执行 install。
-- `dcf init` 支持 vite、tsdown、cordis 接线。本仓库使用 `scripts/build-client.mjs` 的自定义 esbuild 构建，不能假定 CLI 会自动完成构建期注入；需检查接线与产物。
-- 独立产物注入命令为 `NODE_ENV=development dcf instrument lib --write`。它修改生成文件，后续 build 会覆盖；不要把产物位置误报为原始 TSX 精确位置。
+- `dcf init` 支持 vite、tsdown、cordis 接线。本仓库 client bundle 由 `tsdown.config.ts` 构建（双产物 `lib/client.js` + `lib/client-registry.js`，参照 DSH 官方 client-bundle preset），已接入 `codeFinderTsdown()` 构建期注入：dev 语义（`NODE_ENV=development`）下在源码 transform 阶段注入 `data-locatorjs`，位置指向**原始 TSX**；生产语义（`NODE_ENV=production`）零注入。`dcf status` 用 `data-locatorjs` 计数抽查产物。
+- `cordis.patch.yml` 是插件型 patch（仅 insert 块），`dcf init` 明确跳过挂载 code-finder 插件——overlay runtime 由宿主 DSH web profile 提供（本机已链接工具仓库）；`dcf status` 对该项显示 ✗ 属预期，不是缺失。
+- 本机 shell 预设 `NODE_ENV=development`（含构建子进程）；验证生产语义需显式 `NODE_ENV=production pnpm build`。
+- 本机 pnpm 默认 store 解析为项目本地 `.pnpm-store`，与现有 node_modules 的全局 store（`~/.local/share/pnpm/store/v11`）不一致：`pnpm add/remove/install` 需带 `--store-dir /Users/havoc/.local/share/pnpm/store/v11`，否则 `ERR_PNPM_UNEXPECTED_STORE`；`dcf init` 的依赖安装也会因此失败，先手动 `pnpm add -D --store-dir ... link:<工具仓库>` 再 `dcf init --cwd . --no-install`。
 - 接入完成后，在页面按住 **Opt+Shift / Alt+Shift** 悬停组件检查源码定位。CLI 安装、profile 挂载、项目构建期注入是不同状态，分别确认。
 - `dcf remove --cwd .` 会移除接线及依赖，仅在明确需要卸载时使用。
 
@@ -37,7 +39,7 @@ NODE_ENV=development pnpm build
 
 - 本机 `dcf` 可用，DSH `web` profile 已链接上述本地工具仓库。
 - 相邻 `dsh-enhanced-workspace` 已接入 dcf 构建插件及 runtime。
-- 当前 `dsh-workspace-chain` 尚未接入 dcf。单独运行 `NODE_ENV=development pnpm build` 不会自动补齐接入；后续接入完成时更新此记录。
+- `dsh-workspace-chain` 已接入 dcf：依赖 `@havocrao/dsh-code-finder`（link 本地仓库）+ `tsdown.config.ts` 的 `codeFinderTsdown()` 构建期注入（原始 TSX 位置）。`NODE_ENV=development pnpm build` 后 `dcf status` 显示注入 140 处；页面 Opt+Shift 悬停可定位到 `src/client/*.tsx`。client bundle 构建已从 `scripts/build-client.mjs`（自定义 esbuild）迁移到 tsdown。
 
 ## 委派记录协议（改动时必须保持的不变量）
 

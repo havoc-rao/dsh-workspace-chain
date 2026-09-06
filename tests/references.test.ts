@@ -31,17 +31,23 @@ it('resolves workspace context even with no delegation target and never invents 
   expect(workspaceHint('@workspace-id/missing', workspaces, config)).toContain('"unavailable":true')
 })
 it('groups project, session, fork, subagent, and foreign sources without changing pick identity', async () => {
-  const source = createWorkspaceSource(async () => ({ toolName: 'delegate_workspace', targets: [] }), () => items)
+  const catalog: ReferenceItem[] = [...items,
+    { kind: 'workspace', id: 'w2', label: '另一个项目', description: '/other' },
+    { kind: 'session', id: 's4', label: '独立会话', description: '' },
+  ]
+  const source = createWorkspaceSource(async () => ({ toolName: 'delegate_workspace', targets: [] }), () => catalog)
   const candidates = await source.candidates({ sessionId: 's1' as never }, { query: '', signal: new AbortController().signal, position: 'inline' })
   const tree = referenceTree({ open: true, hit: null, generation: 1, highlight: null, groups: [
     { source: 'workspace-chain', status: 'ready', items: candidates },
     { source: 'file', status: 'ready', items: [{ name: 'README.md' }] },
-  ] }, items, 'w1')
-  expect(tree[0]!.label).toBe('本项目 · 项目')
-  expect(tree[0]!.children![0]!.label).toBe('引用 workspace 本身')
+  ] }, catalog, 'w2')
+  expect(tree.map(node => node.label)).toEqual(['workspace', '已配置委托目标', '文件'])
+  expect(tree[0]!.children!.map(node => node.label)).toEqual(['另一个项目', '项目', '未归属工作区的会话'])
+  expect(tree[0]!.children![0]!.children![0]!.label).toBe('引用 workspace 本身')
   const leaves = flattenReferences(tree)
   expect(leaves.find(node => node.description?.includes('fork · 分支'))?.pick).toEqual({ source: 'workspace-chain', index: 2 })
   expect(leaves.find(node => node.description?.includes('子代理 · 工具任务'))).toBeDefined()
+  expect(leaves.find(node => node.section?.includes('独立会话'))?.pick).toEqual({ source: 'workspace-chain', index: 5 })
   expect(leaves.find(node => node.label === 'README.md')?.description).toBe('文件')
 })
 it('aligns a session reference to host membership and the real fresh-session tool contract', () => {

@@ -42,11 +42,14 @@ export function referenceTree(state: MenuState, references: readonly ReferenceIt
     return { id: `workspace:${item.id}`, label: item.label, description: item.description,
       children: [...self ? [{ ...self, label: '引用 workspace 本身' }] : [], ...roots(item.id)] }
   })
-  const current = workspaces.find(item => item.id === `workspace:${currentWorkspace}`)
+  const currentIndex = workspaces.findIndex(item => item.id === `workspace:${currentWorkspace}`)
+  if (currentIndex > 0) workspaces.unshift(...workspaces.splice(currentIndex, 1))
+  const unassigned = roots()
   return [
-    ...current ? [{ ...current, label: `本项目 · ${current.label}`, description: undefined }] : [],
-    { id: 'workspaces', label: '其他 workspace', children: workspaces.filter(item => item !== current) },
-    { id: 'sessions', label: '未归属 workspace 的 session', children: roots() },
+    { id: 'workspaces', label: 'workspace', children: [
+      ...workspaces,
+      ...unassigned.length ? [{ id: 'sessions', label: '未归属工作区的会话', children: unassigned }] : [],
+    ] },
     { id: 'targets', label: '已配置委托目标', children: targets },
     ...others,
   ]
