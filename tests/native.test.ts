@@ -11,7 +11,7 @@ import { JobId } from '@deepseek-ai/dsh-jobs'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { workspaceReference } from '../src/shared/references.js'
+import { workspaceReference, referenceInsert } from '../src/shared/references.js'
 import * as chain from '../src/index.js'
 const RpcId = (value: string) => value as RpcIdType
 const roots: string[] = []
@@ -143,6 +143,20 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
     const continueRecord = JSON.parse(await readFile(join(cwd, '.dsh', 'delegations', continued.delegationId, 'task.json'), 'utf8'))
     expect(continueRecord).toMatchObject({ mode: 'local', workspacePath: cwd, sessionId: output.sessionId, runId: output.sessionId })
     expect(await readFile(join(cwd, '.dsh', 'delegations', continued.delegationId, 'resume.md'), 'utf8')).toContain('session_id')
+    // A session reference inside the task text routes the delegation into that
+    // referenced session even without an explicit session_id: the execution
+    // layer resolves the single dsh-session reference as the continuation target.
+    const viaReference = await tool.execute({ target: cwd, task: `请继续，这是引用发送：${referenceInsert({ kind: 'session', id: output.sessionId, label: 'child', description: '' }).ref}` }, contExec) as { sessionId: string; delegationId: string }
+    expect(viaReference.sessionId).toBe(output.sessionId)
+    expect(workspace.sessionIds).toHaveLength(3)
+    expect(JSON.stringify(firstChild.session.snapshotEvents())).toContain('引用发送')
+    const viaProgress = await readFile(join(cwd, '.dsh', 'delegations', viaReference.delegationId, 'progress.md'), 'utf8')
+    expect(viaProgress).toContain(`continuing session ${output.sessionId}`)
+    // Ambiguous references must not guess: several distinct references require
+    // an explicit session_id and fail with a readable cause before creating anything.
+    const ambiguous = `${referenceInsert({ kind: 'session', id: output.sessionId, label: 'a', description: '' }).ref} 与 ${referenceInsert({ kind: 'session', id: background.sessionId, label: 'b', description: '' }).ref}`
+    await expect(tool.execute({ target: cwd, task: ambiguous }, contExec)).rejects.toThrow('distinct sessions')
+    expect(workspace.sessionIds).toHaveLength(3)
     // A wrong id fails with a readable cause and creates nothing.
     await expect(tool.execute({ target: cwd, task: 'x', session_id: 'session-ghost' }, contExec)).rejects.toThrow('was not found')
     expect(workspace.sessionIds).toHaveLength(beforeContinue)

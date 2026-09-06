@@ -5,6 +5,7 @@ import type { JobOutcome } from '@deepseek-ai/dsh-jobs'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { continueNativeRun, planSessionId, startNativeRun } from './native.js'
+import { sessionReferenceIds } from './shared/references.js'
 import { checkDirectory, type ResolvedConfig } from './config.js'
 import { adaptiveDeadline, probeActivity } from './patience.js'
 import {
@@ -63,6 +64,22 @@ function checkedTimeout(value: number | undefined, fallback: number): number {
   const ms = value ?? fallback
   if (!Number.isSafeInteger(ms) || ms <= 0 || ms > 2_147_483_647) throw new TypeError('timeout_ms must be a positive integer <= 2147483647')
   return ms
+}
+
+/**
+ * The execution-layer continuation decision: an explicit `session_id` always
+ * wins; otherwise a single dsh-session reference inside the task text (the
+ * @-inserted session chip) resolves to the continuation target, so "user
+ * quoted a session" delivers the task into that session instead of silently
+ * creating a new one. SDK runs have no host session to re-enter and ambiguous
+ * references must not be guessed at, so both fail with readable causes.
+ */
+function continuationFromTask(task: string, sdkTarget: { providerName: string } | undefined): string | undefined {
+  const ids = sessionReferenceIds(task)
+  if (!ids.length) return undefined
+  if (sdkTarget) throw new Error(`task contains session references (dsh-session), but SDK target ${sdkTarget.providerName} has no re-entrant host session; use the workspace path as target, or remove the reference to create a fresh session`)
+  if (ids.length > 1) throw new Error(`task references ${ids.length} distinct sessions (${ids.join(', ')}); pass session_id to pick the continuation target explicitly`)
+  return ids[0]!
 }
 
 function logWarn(ctx: Context, message: string): void {
@@ -147,14 +164,14 @@ function enrich(error: unknown, diag: DelegationDiagnostic): DelegationFailure {
 export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
   return defineTool({
     name: config.toolName,
-    description: 'Delegate a self-contained task to a fresh agent session in a registered local workspace. Wait for its final output, or return a background job id to collect with job_output and stop with job_kill.\nReturning to a session: every local delegation returns the target sessionId up front (preallocated before the session exists — the background response and the delegation record carry it from call time), and the session stays host-retained even after a timeout or failure. Pass that same id back as session_id to deliver the next task INTO the existing session instead of creating a new one — the session keeps its full context, so a timed-out/failed delegation can simply be replied into (its record and resume note keep the id and meta).\nParallel scheduling: launch work that is independent of your current steps in the background — e.g. you only need a contract the other side returns (a key name, an API shape) and can keep working on adjacent steps meanwhile — with run_in_background: true, continue your own work, then collect with job_output (wait: true to block) before claiming completion. Use the foreground wait only when the next step cannot proceed without this result.\nTimeouts are activity-aware, not hard caps: while the target keeps producing (a live local agent, session-store writes, or progress checkpoints) the wait extends in timeoutExtensionMs rounds up to maxTimeoutExtensions; a timeout is declared only after the target has been silent for a full extension window. An interrupted foreground call cancels the child session (the host retains it — the failure report points to the delegation record and resume instructions). Every delegation writes a task book and progress checkpoints under <workspace>/.dsh/delegations/<delegationId>/',
+    description: 'Delegate a self-contained task to a fresh agent session in a registered local workspace. Wait for its final output, or return a background job id to collect with job_output and stop with job_kill.\nReturning to a session: every local delegation returns the target sessionId up front (preallocated before the session exists — the background response and the delegation record carry it from call time), and the session stays host-retained even after a timeout or failure. Pass that same id back as session_id to deliver the next task INTO the existing session instead of creating a new one — the session keeps its full context, so a timed-out/failed delegation can simply be replied into (its record and resume note keep the id and meta). A session reference inside the task text works the same way: when session_id is omitted and the task carries exactly one dsh-session reference (the @-inserted session chip), the execution layer resolves it and delivers the task into that referenced session (local workspace targets only; the session must exist and belong to the target workspace). Several distinct references require an explicit session_id, and SDK targets reject references.\nParallel scheduling: launch work that is independent of your current steps in the background — e.g. you only need a contract the other side returns (a key name, an API shape) and can keep working on adjacent steps meanwhile — with run_in_background: true, continue your own work, then collect with job_output (wait: true to block) before claiming completion. Use the foreground wait only when the next step cannot proceed without this result.\nTimeouts are activity-aware, not hard caps: while the target keeps producing (a live local agent, session-store writes, or progress checkpoints) the wait extends in timeoutExtensionMs rounds up to maxTimeoutExtensions; a timeout is declared only after the target has been silent for a full extension window. An interrupted foreground call cancels the child session (the host retains it — the failure report points to the delegation record and resume instructions). Every delegation writes a task book and progress checkpoints under <workspace>/.dsh/delegations/<delegationId>/',
     parameters: {
       target: { type: 'string', required: true, description: `Registered workspace absolute path, or an explicit SDK target name. Configured SDK targets: ${[...config.targets.keys()].join(', ')}.` },
       task: { type: 'string', required: true, description: 'Standalone task including context, files, goals and acceptance criteria. The target is a fresh session with no knowledge of this conversation.' },
       run_in_background: { type: 'boolean', description: 'Return a job id immediately; collect with job_output (wait: true to block up to the host wait cap) and cancel with job_kill. Default false: wait for the final output. Prefer true for tasks that can run in parallel with your remaining work; the foreground wait blocks until settlement or timeout.' },
       timeout_ms: { type: 'number', description: 'Override the configured defaultTimeoutMs for this call (positive integer ms). The target is cancelled only after the activity check: while it keeps producing, the wait extends by timeoutExtensionMs per round (maxTimeoutExtensions rounds); timeout is declared after a full silent extension window. On timeout / cancellation the delegation record explains how to resume, and the session stays open in the host.' },
       title: { type: 'string', description: 'Optional pinned title for the created session (local path only, requires host sessions.rename). Defaults to `<project>/<task summary>`, e.g. `dsh-remote/改造 cordis 配置`, so the workspace session list shows the concrete task.' },
-      session_id: { type: 'string', description: 'Return to an existing host session instead of creating a new one (local workspace targets only). Deliver the task into that same retained session — use the sessionId your previous delegation returned or that its delegation record lists (resume.md keeps it too). The session keeps its full context, composition and pinned title; no new session is created. If that session is still running, the task queues behind its current turn. A timed-out or failed delegation keeps its session and record, so this is how to reply back into it — a fresh delegation to the same workspace would create an unrelated session.' },
+      session_id: { type: 'string', description: 'Return to an existing host session instead of creating a new one (local workspace targets only). Deliver the task into that same retained session — use the sessionId your previous delegation returned or that its delegation record lists (resume.md keeps it too). The session keeps its full context, composition and pinned title; no new session is created. If that session is still running, the task queues behind its current turn. A timed-out or failed delegation keeps its session and record, so this is how to reply back into it — a fresh delegation to the same workspace would create an unrelated session. When omitted, a single dsh-session reference inside `task` (the @-inserted session chip) is resolved as the continuation target — same routing, no explicit id needed.' },
     },
     output: {
       schema: { oneOf: [
@@ -182,9 +199,13 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
       const workspace = !target ? ctx.get('workspaceRegistry')?.list().find(w => w.path === args.target) : undefined
       if (!target && !workspace) throw new Error(`Unknown workspace target ${JSON.stringify(args.target)}. Available targets: ${[...config.targets.keys()].join(', ')}`)
       if (args.session_id !== undefined && (typeof args.session_id !== 'string' || !args.session_id.trim())) throw new TypeError('session_id must be a non-empty string')
-      const continuing = typeof args.session_id === 'string' ? args.session_id.trim() : undefined
-      if (continuing && target) throw new Error('session_id requires a local workspace target (SDK runs have no re-entrant session id)')
+      const explicit = typeof args.session_id === 'string' ? args.session_id.trim() : undefined
+      if (explicit && target) throw new Error('session_id requires a local workspace target (SDK runs have no re-entrant session id)')
       if (!args.task.trim()) throw new Error('task must not be empty')
+      // Execution-layer routing: an explicit session_id always wins; otherwise a
+      // single dsh-session reference inside the task text resolves to the
+      // continuation target (deliver into the referenced session, not a new one).
+      const continuing = explicit ?? continuationFromTask(args.task, target)
       // Recheck canonical path: reject deletion or replacement with a symlink elsewhere.
       if (target && checkDirectory(target.cwd) !== target.cwd) throw new Error(`Workspace directory changed: ${target.cwd}`)
       const parent = exec.agent

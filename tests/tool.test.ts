@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolveConfig } from '../src/config.js'
 import { collectRun, createDelegationTool } from '../src/tool.js'
 import { invocationHint } from '../src/presentation.js'
+import { referenceInsert } from '../src/shared/references.js'
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 function fixture(options: { records?: boolean; timeoutExtensionMs?: number; maxTimeoutExtensions?: number } = {}) {
@@ -190,6 +191,12 @@ describe('delegation tool', () => {
     await expect(f.tool.execute({ target: 'b', task: 'x', session_id: 'session-1' }, f.exec)).rejects.toThrow('session_id requires a local workspace target')
     await expect(f.tool.execute({ target: 'b', task: 'x', session_id: 42 }, f.exec)).rejects.toThrow('"session_id" must be a string')
     await expect(f.tool.execute({ target: 'b', task: 'x', session_id: '   ' }, f.exec)).rejects.toThrow('session_id must be a non-empty string')
+    expect(f.start).not.toHaveBeenCalled()
+  })
+  it('rejects session references inside the task on an SDK target before spawning', async () => {
+    const f = fixture()
+    const ref = referenceInsert({ kind: 'session', id: 'session-remote', label: 'child', description: '' }).ref
+    await expect(f.tool.execute({ target: 'b', task: `发给它：${ref}` }, f.exec)).rejects.toThrow('has no re-entrant host session')
     expect(f.start).not.toHaveBeenCalled()
   })
   it('accepts an explicit title and stores it in the task book', async () => {

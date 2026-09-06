@@ -45,7 +45,7 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
 
 宿主拥有新会话及其持久化生命周期；任务结束后保留会话，可从工作区列表打开并继续。**会话标题固定**：`sessions.create` 不支持 title 字段，但宿主提供 `sessions.rename`——插件在创建后立即调用它把标题固定为**任务摘要**（任务首行去格式后截断 40 字符，如 `改造 cordis.patch.yml 配置…`），让工作区会话列表直接显示"这个会话在做什么具体任务"；会话已在目标工作区分组下，标题不重复工作区名。想要 `类别/任务` 形式（如 `绘画/画一只猫`）时，在调用中显式传 `title` 即可完全自定义。`pinnedTitles: false` 可关闭（标题回退为宿主自动生成）。rename 事件不开启 turn、不清除 blank 标记；老宿主无 `rename` 或标题被拒时只记录 progress 行，不影响委派。取消/超时调用 `sessions.cancel`，失败和部分输出如实回传。插件不调用 `selectModel`，避免该接口连带修改宿主全局默认模型。当前会话的有效 preset 通过 `sessions.list` 读取。递归委派最多四层。
 
-**会话 ID 创建即得，可随时回到同一会话**：本地委派的会话 ID 由插件在调用入口**预分配**（`session-<uuid>`，宿主 `sessions.create` 契约支持显式 ID 且重试同名同工作区返回同一会话）——后台 job 的初始响应与委派记录在**任务尚未启动**时就携带 `sessionId`，进度行 `session created <id>` 确认会话落地；若老宿主拒绝预分配，自动回退为宿主生成 ID 并如实记录（以返回值/记录为准）。因此上一会话还在运行、刚刚创建、或已经超时/失败，父侧都持有它的 ID 与元数据（`delegationId`、进度/任务书/resume 路径）。要继续它时，把该 ID 作为 **`session_id`** 参数再次调用 `delegate_workspace`：任务直接送进**同一会话**（宿主幂等 adopt/resume，保留原上下文、preset 与标题，不新建会话）；会话仍在运行则消息排队等它空闲。这是重新委派的默认推荐路径——新开会话只会在目标跨会话上下文确实缺失时使用。
+**会话 ID 创建即得，可随时回到同一会话**：本地委派的会话 ID 由插件在调用入口**预分配**（`session-<uuid>`，宿主 `sessions.create` 契约支持显式 ID 且重试同名同工作区返回同一会话）——后台 job 的初始响应与委派记录在**任务尚未启动**时就携带 `sessionId`，进度行 `session created <id>` 确认会话落地；若老宿主拒绝预分配，自动回退为宿主生成 ID 并如实记录（以返回值/记录为准）。因此上一会话还在运行、刚刚创建、或已经超时/失败，父侧都持有它的 ID 与元数据（`delegationId`、进度/任务书/resume 路径）。要继续它时，把该 ID 作为 **`session_id`** 参数再次调用 `delegate_workspace`：任务直接送进**同一会话**（宿主幂等 adopt/resume，保留原上下文、preset 与标题，不新建会话）；会话仍在运行则消息排队等它空闲。这是重新委派的默认推荐路径——新开会话只会在目标跨会话上下文确实缺失时使用。**引用即发送**：也可以不传 `session_id`——任务文本中若恰好带一个会话引用（`@[label](dsh-session:…)`，输入框 @ 插入的 chip），执行层解析它作为发送目标，把任务送进被引用的会话（仅本地工作区目标；被引用会话必须存在且属于目标工作区，否则按对应错误如实报出）。职责分层：**引用只向模型提供会话 ID 信息 → 模型显式选择 `session_id` 与任务 → 执行层判定「用预分配 ID 新建」还是「在原会话上发送」**；显式 `session_id` 与文本引用冲突时显式参数优先。任务文本引用多个不同会话时无法自动判定，须显式传 `session_id` 消歧；SDK 目标无宿主会话可回，任务含引用时明确报错而不是静默新建。
 
 ## 委派记录与进度协议（checkpoint）
 
@@ -128,7 +128,7 @@ child bin 不传配置参数时使用包内 `src/child.cordis.yml`。该组合�
 
 ## 工具与后处理
 
-参数：`target: string`、`task: string`、`run_in_background?: boolean`、`timeout_ms?: number`（覆盖默认超时，默认 `defaultTimeoutMs`，本地/SDK 路径均生效）、`title?: string`（可选，自定义固定会话标题，如 `绘画/画一只猫`；缺省为任务摘要，仅本地路径有 rename 效果，SDK 路径只写入任务书）、`session_id?: string`（**仅本地路径**：回到已发布的同一会话继续——把上次委派返回/记录的会话 ID 传入，任务直接送进该保留会话，不新建；详见「默认本地 API 路径」）。SDK target 传 `session_id` 会明确报错。task 应含相关上游结果、目标文件、预期行为和验收标准；不复制 A 的全部历史。
+参数：`target: string`、`task: string`、`run_in_background?: boolean`、`timeout_ms?: number`（覆盖默认超时，默认 `defaultTimeoutMs`，本地/SDK 路径均生效）、`title?: string`（可选，自定义固定会话标题，如 `绘画/画一只猫`；缺省为任务摘要，仅本地路径有 rename 效果，SDK 路径只写入任务书）、`session_id?: string`（**仅本地路径**：回到已发布的同一会话继续——把上次委派返回/记录的会话 ID 传入，任务直接送进该保留会话，不新建；未传时若任务文本恰好含一个 `dsh-session` 会话引用，执行层解析它作为发送目标，语义相同。详见「默认本地 API 路径」）。SDK target 传 `session_id` 会明确报错，任务文本含会话引用同样报错。task 应含相关上游结果、目标文件、预期行为和验收标准；不复制 A 的全部历史。
 
 **并行建议**：同一请求可拆成多个互不依赖的子任务时（例如只等对方返回某个 key / 契约名，或改动互不干扰的多个工作区），对可并行的部分用 `run_in_background: true` 挂后台、继续处理其他事情，最后统一用 `job_output` 收取结果并整合；只有下一步必须依赖其结果时才前台等待。工具描述与 invocation hint 已内置这一决策规则，超时活动感知语义见上文「失败诊断与等待语义」。
 
