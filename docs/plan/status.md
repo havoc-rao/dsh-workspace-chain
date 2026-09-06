@@ -56,6 +56,6 @@
 - **过程可见性**：后台 job 提供 readOutput——运行中 job_output 返回 progress 摘要，结算后返回最终输出；native 路径在 session 创建/任务交付/取消请求处打生命周期 checkpoint。
 - **等待语义**：区分顶层 `tool-jobs` 的两种返回（wait 上限到点 → `[status: running]`+摘要；`Error: wait aborted` → 父侧信号被宿主中止，任务仍在跑）；前台/后台超时统一由 `timeout_ms`（默认 defaultTimeoutMs）约束并在诊断中标注 elapsed；新参数仅扩展兼容。
 - **可恢复性**：task/resume 持久化即恢复入口；resume.md 含续跑指引与样例任务书；宿主保留会话的找回路径写入诊断。
-- **会话标题固定**：确认 `sessions.create` 无 title 字段、宿主提供 `sessions.rename`（追加 `session/title` 事件并 pin 住自动再生成）；创建后立即 rename 为 `项目/任务摘要`（`deriveDelegationTitle`：工作区显示名 + 任务首行去格式后截断 40 字符；显式 `title` 参数优先；`pinnedTitles: false` 关闭）。rename 为 best-effort（老宿主无该 RPC / 标题被拒只记 progress 行）；SDK 子进程无宿主会话，标题只写入任务书。任务书同步记录 `title`（task.md 表行 + task.json 字段）。
+- **会话标题固定**：确认 `sessions.create` 无 title 字段、宿主提供 `sessions.rename`（追加 `session/title` 事件并 pin 住自动再生成）；创建后立即 rename。默认标题=任务摘要（`deriveDelegationTitle`：任务首行去格式后截断 40 字符，不拼工作区名——会话已在工作区分组下，用户反馈前缀冗余）；想要 `类别/任务`（如 `绘画/画一只猫`）可显式传 `title`；`pinnedTitles: false` 关闭。rename 为 best-effort（老宿主无该 RPC / 标题被拒只记 progress 行）；SDK 子进程无宿主会话，标题只写入任务书。任务书同步记录 `title`（task.md 表行 + task.json 字段）。
 - 测试：新增 delegation-record 专项（含 deriveDelegationTitle 格式/截断/去格式用例）与 tool 层分类/等待/readOutput/降级/title 用例；native 生命周期新增 rename 固定/失败容忍/缺省跳过；native 集成测试断言 `Target/not-a-command` 风格标题经真实 rename RPC 固定且入任务书。67 项全绿，typecheck/build 通过。
 - 未完成：P6 宿主侧核查（会话回收策略、父侧信号中止条件、tool-jobs wait 配置）与真实页面视觉验收；记录在 README"宿主侧待核查"。

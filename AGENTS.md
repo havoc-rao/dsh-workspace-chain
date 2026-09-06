@@ -44,7 +44,7 @@ NODE_ENV=development pnpm build
 - 每次 `delegate_workspace` 调用（前/后台、本地/SDK）在目标工作区写 `<workspace>/.dsh/delegations/<delegationId>/`：`task.md`（人类可读任务书）、`task.json`（结构化）、`progress.md`（checkpoint 日志）、`resume.md`（恢复指引+续跑样例）。`delegationRecords: false` 关闭时完全恢复旧行为（任务原文原样交付）。
 - 记录写入是 best-effort：目标目录不可写时委派继续，无 checkpoint 降级，不得因此失败。
 - 结算分类取值固定：`completed | timeout | cancelled | crash | host-reclaim | refused | max-tokens | failed`（与父侧分析文档契约对齐，`failed` = unknown 槽）。分类依赖我方信号状态（deadline 触发 vs 调用方信号中止），不只是 child stopReason。
-- 会话标题固定（本地路径）：`sessions.create` 无 title 字段，创建后经 `sessions.rename` 固定 `项目/任务摘要`（`deriveDelegationTitle`：工作区显示名/任务首行去格式后截断 40 字符；显式 `title` 参数优先）。`pinnedTitles: false` 关闭。rename 是 best-effort：老宿主无该 RPC 或标题被拒只记 progress 行，不得失败委派。SDK 子进程无宿主会话，标题只写入任务书。
+- 会话标题固定（本地路径）：`sessions.create` 无 title 字段，创建后经 `sessions.rename` 固定标题。默认=任务摘要（`deriveDelegationTitle`：任务首行去格式后截断 40 字符，**不拼工作区名**——会话已在工作区分组下）；显式 `title` 参数优先（可传 `类别/任务` 如 `绘画/画一只猫`）。`pinnedTitles: false` 关闭。rename 是 best-effort：老宿主无该 RPC 或标题被拒只记 progress 行，不得失败委派。SDK 子进程无宿主会话，标题只写入任务书。
 - `record.title` 与传给 `sessions.rename` 的标题必须一致（`pinnedTitles: false` 时只记录不 rename）。
 - 后台 job 必须提供 `readOutput`：运行中返回 progress.md 摘要，结算后返回最终输出（保持"运行中有可见性、结算有最终结果"两侧语义）。
 - 前台/后台失败消息与 job detail 必须包含：Classification、transcript 位置（`sessionStoreHint`）、Checkpoint/Task/Resume 三路径、elapsed。

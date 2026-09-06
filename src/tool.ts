@@ -3,7 +3,6 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { SubagentRun } from '@deepseek-ai/dsh-subagent'
 import type { JobOutcome } from '@deepseek-ai/dsh-jobs'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import { basename } from 'node:path'
 import { startNativeRun } from './native.js'
 import { checkDirectory, type ResolvedConfig } from './config.js'
 import {
@@ -181,8 +180,9 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
       const mode: DelegationMode = target ? 'sdk' : 'local'
       const workspacePath = target ? target.cwd : workspace!.path
       const dshHome = resolveDshHome(target?.env.DSH_HOME)
-      // Pinned session title in the `项目/任务摘要` shape; an explicit title wins.
-      const title = args.title?.trim() || deriveDelegationTitle(target ? args.target : workspace?.title || basename(workspace!.path), args.task)
+      // Pinned session title: the task's own first line (the workspace already
+      // owns the session's list placement); an explicit `类别/任务` title wins.
+      const title = args.title?.trim() || deriveDelegationTitle(args.task)
       const record = createRecord(ctx, config, { mode, target: args.target, workspacePath, parentSessionId: parent.id, task: args.task, title, timeoutMs })
       const request = { parent, label: `Workspace: ${args.target}`, prompt: [{ type: 'text' as const, text: composeTask(args.task, record) }] }
       const start = (signal: AbortSignal) => target

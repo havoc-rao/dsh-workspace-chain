@@ -43,7 +43,7 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
 
 `@`/拖放引用 → 后续消息披露 `delegate_workspace` → `sessions.create` → `sessions.prompt` → `agent.whenIdle()` → 核验 turn 结果 → 回传当前会话。只接收注册表中的精确工作区路径，不创建任意目录。仅引用不执行。
 
-宿主拥有新会话及其持久化生命周期；任务结束后保留会话，可从工作区列表打开并继续。**会话标题固定**：`sessions.create` 不支持 title 字段，但宿主提供 `sessions.rename`——插件在创建后立即调用它把标题固定为 `项目/任务摘要`（如 `dsh-remote/改造 cordis.patch.yml 配置`；`项目`=工作区显示名，`摘要`=任务首行去格式后截断 40 字符），让工作区会话列表直接显示"这个会话在做什么具体任务"，而不是固定前缀。也可在调用时显式传 `title` 完全自定义；`pinnedTitles: false` 关闭（标题回退为宿主自动生成）。rename 事件不开启 turn、不清除 blank 标记；老宿主无 `rename` 或标题被拒时只记录 progress 行，不影响委派。取消/超时调用 `sessions.cancel`，失败和部分输出如实回传。插件不调用 `selectModel`，避免该接口连带修改宿主全局默认模型。当前会话的有效 preset 通过 `sessions.list` 读取。递归委派最多四层。
+宿主拥有新会话及其持久化生命周期；任务结束后保留会话，可从工作区列表打开并继续。**会话标题固定**：`sessions.create` 不支持 title 字段，但宿主提供 `sessions.rename`——插件在创建后立即调用它把标题固定为**任务摘要**（任务首行去格式后截断 40 字符，如 `改造 cordis.patch.yml 配置…`），让工作区会话列表直接显示"这个会话在做什么具体任务"；会话已在目标工作区分组下，标题不重复工作区名。想要 `类别/任务` 形式（如 `绘画/画一只猫`）时，在调用中显式传 `title` 即可完全自定义。`pinnedTitles: false` 可关闭（标题回退为宿主自动生成）。rename 事件不开启 turn、不清除 blank 标记；老宿主无 `rename` 或标题被拒时只记录 progress 行，不影响委派。取消/超时调用 `sessions.cancel`，失败和部分输出如实回传。插件不调用 `selectModel`，避免该接口连带修改宿主全局默认模型。当前会话的有效 preset 通过 `sessions.list` 读取。递归委派最多四层。
 
 ## 委派记录与进度协议（checkpoint）
 
@@ -124,7 +124,7 @@ child bin 不传配置参数时使用包内 `src/child.cordis.yml`。该组合�
 
 ## 工具与后处理
 
-参数：`target: string`、`task: string`、`run_in_background?: boolean`、`timeout_ms?: number`（覆盖默认超时，默认 `defaultTimeoutMs`，本地/SDK 路径均生效）、`title?: string`（可选，自定义固定会话标题；缺省为 `项目/任务摘要`，仅本地路径有 rename 效果，SDK 路径只写入任务书）。task 应含相关上游结果、目标文件、预期行为和验收标准；不复制 A 的全部历史。
+参数：`target: string`、`task: string`、`run_in_background?: boolean`、`timeout_ms?: number`（覆盖默认超时，默认 `defaultTimeoutMs`，本地/SDK 路径均生效）、`title?: string`（可选，自定义固定会话标题，如 `绘画/画一只猫`；缺省为任务摘要，仅本地路径有 rename 效果，SDK 路径只写入任务书）。task 应含相关上游结果、目标文件、预期行为和验收标准；不复制 A 的全部历史。
 
 前台成功的规范值包含 `{ kind: 'foreground', runId, output, sessionId?, delegationId?, checkpointPath? }`（本地路径包含真实 sessionId，用于 UI 元信息，不混入模型的结果文本；`delegationId`/`checkpointPath` 指向该次委派记录），模型读到 B 的最终文本；非 completed 的 stop reason 返回工具错误，错误携带分类诊断与记录路径。完成与失败均等待运行收尾；本地路径保留宿主会话，SDK 路径释放子进程。后台使用 parent-owned jobs，成功输出经 `job_output` 返回，运行中可经 `job_output` 读 checkpoint 摘要；取消和超时传递到 provider，结算 detail 含分类诊断（`timeout`/`cancelled`/`crash`/`host-reclaim` 等），清理失败不会被当成成功。
 

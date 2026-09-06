@@ -52,7 +52,7 @@ describe('delegation tool', () => {
     expect(f.dispose).toHaveBeenCalledOnce()
     expect(invocationHint(f.ctx, f.config)).toContain('Deferred tool: delegate_workspace')
     const taskBook = JSON.parse(readFileSync(join(dirname(result.checkpointPath), 'task.json'), 'utf8'))
-    expect(taskBook).toMatchObject({ mode: 'sdk', target: 'b', workspacePath: realpathSync(f.cwd), parentSessionId: 'parent-1', runId: 'child-1', timeoutMs: 30, title: 'b/Implement API' })
+    expect(taskBook).toMatchObject({ mode: 'sdk', target: 'b', workspacePath: realpathSync(f.cwd), parentSessionId: 'parent-1', runId: 'child-1', timeoutMs: 30, title: 'Implement API' })
     const progress = readFileSync(result.checkpointPath, 'utf8')
     expect(progress).toContain('[init] delegation record created')
     expect(progress).toContain('[start] subagent created child-1 (SDK run id)')

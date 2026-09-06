@@ -80,13 +80,13 @@ describe('delegation record', () => {
     expect(JSON.parse(readFileSync(record.taskJsonPath, 'utf8')).title).toBe('绘画/画一只猫')
     expect(readFileSync(record.taskPath, 'utf8')).toContain('| 任务标题 | 绘画/画一只猫 |')
   })
-  it('derives the pinned title as project/task with first line, stripping and truncation', () => {
-    expect(deriveDelegationTitle('绘画', '画一只猫并提交到远程仓库')).toBe('绘画/画一只猫并提交到远程仓库')
-    expect(deriveDelegationTitle('dsh-remote', '改造 cordis.patch.yml 的 !!js config 表达式，然后补 lib/index.js 的 schema 与优先级链，并跑验证')).toBe('dsh-remote/改造 cordis.patch.yml 的 !!js config 表达式，然后…')
-    expect(deriveDelegationTitle('project', '- 第一行是任务概述\n第二行是细节')).toBe('project/第一行是任务概述')
-    expect(deriveDelegationTitle('project', '/not-a-command')).toBe('project/not-a-command')
-    expect(deriveDelegationTitle('project', '# 标题行\n内容')).toBe('project/标题行')
-    expect(deriveDelegationTitle('', '')).toBe('工作区/委派任务')
+  it('derives a short task-only title with first line, stripping and truncation', () => {
+    expect(deriveDelegationTitle('画一只猫并提交到远程仓库')).toBe('画一只猫并提交到远程仓库')
+    expect(deriveDelegationTitle('改造 cordis.patch.yml 的 !!js config 表达式，然后补 lib/index.js 的 schema 与优先级链，并跑验证')).toBe('改造 cordis.patch.yml 的 !!js config 表达式，然后…')
+    expect(deriveDelegationTitle('- 第一行是任务概述\n第二行是细节')).toBe('第一行是任务概述')
+    expect(deriveDelegationTitle('/not-a-command')).toBe('not-a-command')
+    expect(deriveDelegationTitle('# 标题行\n内容')).toBe('标题行')
+    expect(deriveDelegationTitle('   ')).toBe('委派任务')
   })
   it('fails loudly when the record directory cannot be created (caller degrades best-effort)', () => {
     const workspacePath = mkdtempSync(join(tmpdir(), 'chain-record-')); roots.push(workspacePath)

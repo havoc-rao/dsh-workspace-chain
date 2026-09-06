@@ -235,25 +235,23 @@ export function composeTask(task: string, record?: DelegationRecord): string {
 }
 
 /**
- * Derive the pinned session title in the `项目/具体任务` shape (e.g.
- * `dsh-remote/改造 cordis.patch.yml 配置`): the project label (workspace
- * display title, or SDK target name) as the category, plus the first line of
- * the raw task as the concrete work — so the target workspace's session list
- * shows what this delegation is actually doing instead of a fixed prefix.
- * Callers can bypass the derivation entirely by passing an explicit `title`.
+ * Derive the default pinned session title from the task itself: the first
+ * line, stripped of leading markdown/slash markers and truncated — e.g.
+ * `改造 cordis.patch.yml 配置…`. The workspace already owns the session's
+ * list placement, so the title stays short and does not repeat the workspace
+ * name. Callers that want a `类别/任务` shape (e.g. `绘画/画一只猫`) pass an
+ * explicit `title`.
  */
-export function deriveDelegationTitle(project: string, task: string, maxSummary = 40): string {
+export function deriveDelegationTitle(task: string, maxSummary = 40): string {
   const summary = (task.split('\n')[0] ?? '')
     // Leading markdown bullets, blockquote, headings and list numbers.
     .replace(/^\s*(?:[-*#>]|\d+[.)])\s*/, '')
-    // The local path accepts slash-prefixed tasks; never render a double slash.
+    // The local path accepts slash-prefixed tasks; never render a leading slash.
     .replace(/^\/+/, '')
     .replace(/\s+/gu, ' ')
     .trim()
   const clipped = summary.length > maxSummary ? `${summary.slice(0, maxSummary)}…` : summary
-  const leaf = clipped || '委派任务'
-  const projectPart = project.trim() || '工作区'
-  return `${projectPart}/${leaf}`
+  return clipped || '委派任务'
 }
 
 /**
