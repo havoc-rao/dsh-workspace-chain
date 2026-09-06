@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -10,13 +10,18 @@ import { collectRun, createDelegationTool } from '../src/tool.js'
 import { invocationHint } from '../src/presentation.js'
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
-function fixture(options: { records?: boolean } = {}) {
+function fixture(options: { records?: boolean; timeoutExtensionMs?: number; maxTimeoutExtensions?: number } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), 'chain-tool-')); roots.push(cwd)
   const dispose = vi.fn(async () => {})
   const start = vi.fn(async () => ({ id: 'child-1', result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'done' }] }), dispose }))
   const jobs = { start: vi.fn() }
   const ctx = { subagents: { start }, get: (key: string) => key === 'jobs' ? jobs : undefined } as unknown as Context
-  const config = resolveConfig({ defaultTimeoutMs: 30, delegationRecords: options.records ?? true, targets: { b: { cwd, command: 'node', purpose: 'Backend' } } })
+  // shareSessionStore: false keeps the activity probe's session-store reads inside the temp dir.
+  const config = resolveConfig({
+    defaultTimeoutMs: 30, timeoutExtensionMs: options.timeoutExtensionMs ?? 60, maxTimeoutExtensions: options.maxTimeoutExtensions ?? 5,
+    shareSessionStore: false, delegationRecords: options.records ?? true,
+    targets: { b: { cwd, command: 'node', purpose: 'Backend' } },
+  })
   const tool = createDelegationTool(ctx, config)
   const agent = { id: 'parent-1', session: { header: { cwd } } }
   const exec = { signal: new AbortController().signal, agent } as unknown as ToolRunContext
@@ -203,5 +208,70 @@ it('keeps the raw task when delegation records are disabled', async () => {
     await Promise.all([1, 2].map(i => f.tool.execute({ target: 'b', task: `task ${i}` }, f.exec)))
     expect(f.start).toHaveBeenCalledTimes(2); expect(f.dispose).toHaveBeenCalledTimes(2)
     expect(records(f.cwd)).toHaveLength(2)
+  })
+  it('extends the foreground wait while the target agent is live and completes once the result arrives', async () => {
+    const f = fixture()
+    let resolveResult!: (value: { stopReason: string; output: { type: string; text: string }[] }) => void
+    f.start.mockImplementation(async () => ({
+      id: 'child-1',
+      localAgent: { status: 'running' },
+      result: new Promise(resolve => { resolveResult = resolve }),
+      dispose: f.dispose,
+    }) as never)
+    const pending = f.tool.execute({ target: 'b', task: 'slow' }, f.exec) as Promise<{ kind: string; output: string }>
+    // The 30ms base window must NOT abort while the agent is live: wait for the extension checkpoint.
+    await vi.waitFor(() => expect(progressOf(f.cwd, 'progress.md')).toContain('[extend] target still active (target agent is live'))
+    resolveResult({ stopReason: 'completed', output: [{ type: 'text', text: 'done' }] })
+    expect(await pending).toMatchObject({ kind: 'foreground', output: 'done' })
+    expect(progressOf(f.cwd, 'progress.md')).toContain('[result] completed')
+  })
+  it('keeps extending while the target stays active and settles as timeout only at the extension cap', async () => {
+    const f = fixture({ timeoutExtensionMs: 25, maxTimeoutExtensions: 3 })
+    f.start.mockImplementation(async (_provider?: unknown, request?: any) => {
+      const result = new Promise<never>((_resolve, reject) => {
+        request.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+      })
+      return { id: 'child-1', localAgent: { status: 'running' }, result, dispose: f.dispose } as never
+    })
+    const error = await f.tool.execute({ target: 'b', task: 'cap' }, f.exec).then(() => null, (reason: unknown) => reason) as Error
+    expect(error.message).toContain('Classification: timeout')
+    expect(error.message).toContain('extension cap')
+    expect(error.message).toContain('waited 30ms + 3×25ms')
+    const granted = (progressOf(f.cwd, 'progress.md').match(/\[extend\]/g) ?? []).length
+    expect(granted).toBe(3)
+    const elapsed = Number(error.message.match(/elapsed (\d+)ms/)?.[1])
+    expect(elapsed).toBeGreaterThanOrEqual(95)
+  })
+  it('waits out a session-store heartbeat and times out only after the store goes silent', async () => {
+    const f = fixture({ timeoutExtensionMs: 40, maxTimeoutExtensions: 5 })
+    const sessions = join(f.cwd, '.dsh-workspace-chain', 'sessions')
+    mkdirSync(sessions, { recursive: true })
+    const log = join(sessions, 'child.jsonl')
+    writeFileSync(log, '')
+    const touch = () => utimesSync(log, new Date(), new Date())
+    touch()
+    const beats = setInterval(touch, 20)
+    f.start.mockImplementation(async (_provider?: unknown, request?: any) => {
+      const result = new Promise<never>((_resolve, reject) => {
+        request.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+      })
+      return { id: 'child-1', result, dispose: f.dispose } as never
+    })
+    const pending = f.tool.execute({ target: 'b', task: 'heartbeat' }, f.exec).then(() => null, (reason: unknown) => reason) as Promise<Error>
+    await vi.waitFor(() => expect(progressOf(f.cwd, 'progress.md')).toContain('[extend] target still active'))
+    clearInterval(beats)
+    const error = await pending
+    expect(error.message).toContain('Classification: timeout')
+    expect(error.message).toContain('no target activity observed')
+    expect(error.message).toContain('store')
+    expect(progressOf(f.cwd, 'progress.md')).toContain('[extend] target still active (target session store heartbeat')
+  })
+  it('exposes the parallel-background and activity-aware timeout guidance in the invocation hint', () => {
+    const f = fixture()
+    const hint = invocationHint(f.ctx, f.config)
+    expect(hint).toContain('Deferred tool: delegate_workspace')
+    expect(hint).toContain('run_in_background: true 挂后台')
+    expect(hint).toContain('超时是活动感知的')
+    expect(hint).toContain('maxTimeoutExtensions')
   })
 })

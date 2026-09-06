@@ -59,3 +59,13 @@
 - **会话标题固定**：确认 `sessions.create` 无 title 字段、宿主提供 `sessions.rename`（追加 `session/title` 事件并 pin 住自动再生成）；创建后立即 rename。默认标题=任务摘要（`deriveDelegationTitle`：任务首行去格式后截断 40 字符，不拼工作区名——会话已在工作区分组下，用户反馈前缀冗余）；想要 `类别/任务`（如 `绘画/画一只猫`）可显式传 `title`；`pinnedTitles: false` 关闭。rename 为 best-effort（老宿主无该 RPC / 标题被拒只记 progress 行）；SDK 子进程无宿主会话，标题只写入任务书。任务书同步记录 `title`（task.md 表行 + task.json 字段）。
 - 测试：新增 delegation-record 专项（含 deriveDelegationTitle 格式/截断/去格式用例）与 tool 层分类/等待/readOutput/降级/title 用例；native 生命周期新增 rename 固定/失败容忍/缺省跳过；native 集成测试断言 `Target/not-a-command` 风格标题经真实 rename RPC 固定且入任务书。67 项全绿，typecheck/build 通过。
 - 未完成：P6 宿主侧核查（会话回收策略、父侧信号中止条件、tool-jobs wait 配置）与真实页面视觉验收；记录在 README"宿主侧待核查"。
+
+## 2026-09-07：长任务并行体验 + 活动感知超时
+
+背景：委派超时目前是硬 deadline（300s 到点即 cancel 子会话），但委派任务经常确实耗时（对方仍在正常工作），且链式任务常可并行（如只等对方返回一个 key/契约名即可续接）——并行部分应挂后台、主流程继续，最后 join 结果。
+
+- **并行调度 prompt**：`delegate_workspace` 工具描述与 invocation hint（含工作区交接提示）明确决策规则——同一请求可拆的互不依赖子任务（只等对方返回 key/契约名、改动互不干扰的多个工作区）一律 `run_in_background: true` 挂后台继续其他工作，最后统一 `job_output` 收取；只有下一步必须依赖其结果时才前台等待。
+- **活动感知超时**（替换硬 deadline，`src/patience.ts` `adaptiveDeadline`）：新增配置 `timeoutExtensionMs`（默认 120000ms）、`maxTimeoutExtensions`（默认 10）。base 窗口（`timeout_ms`/`defaultTimeoutMs`）到点后探测目标会话活动——本地 agent `status === 'running'`、`<DSH_HOME>/sessions` 近期写入、progress.md 有目标侧 `- ` checkpoint 行（插件 `[init]`/`[start]`/`[extend]` 生命周期行不算）——任一命中顺延一轮，`[extend] target still active (…)` 写入 progress（`job_output` 可见）；持续静默或轮数用尽才按 `timeout` 结算，诊断 detail 附最后观测活动与停等时长。调用方信号中止时探测定时器停止（不把 cancelled 误判 timeout）。
+- **任务书活跃心跳**：`composeTask` 信封增加长耗时步骤（构建/测试/等待外部结果）开始时追加 `- <步骤>…` 的协议，并告知目标侧超时语义，让"对方还在正常工作"可被观测。
+- 测试：新增 patience 单测（顺延/静默/上限/取消竞态/探测判定）与 tool 层用例（live agent 顺延后完成、session-store 心跳顺延后静默超时、扩展上限、hint 文案）、config 新字段校验；tool fixture 改为隔离 DSH_HOME 避免探测读到真实 home。typecheck/build 通过，83 项测试全绿。
+- 未完成：真实长任务现场验收（前台/后台各一次观察 `[extend]` 顺延与静默超时）；README"宿主侧待核查"开放项不变。

@@ -18,6 +18,10 @@ export interface Config {
   toolName?: string
   promptEnabled?: boolean
   defaultTimeoutMs?: number
+  /** Per-round wait extension while the target session still shows activity. Default 120000 (2 min). */
+  timeoutExtensionMs?: number
+  /** Cap on extension rounds before a still-active delegation is settled as timeout. Default 10. */
+  maxTimeoutExtensions?: number
   shareSessionStore?: boolean
   /** Write the delegation task book + progress checkpoints to <target>/.dsh/delegations/<id>/. Default true. */
   delegationRecords?: boolean
@@ -29,6 +33,8 @@ export const Config: z<Config> = z.object({
   toolName: z.string().default('delegate_workspace'),
   promptEnabled: z.boolean().default(true),
   defaultTimeoutMs: z.number().default(300_000),
+  timeoutExtensionMs: z.number().default(120_000),
+  maxTimeoutExtensions: z.number().default(10),
   shareSessionStore: z.boolean().default(true),
   delegationRecords: z.boolean().default(true),
   pinnedTitles: z.boolean().default(true),
@@ -52,6 +58,10 @@ export interface ResolvedConfig {
   toolName: string
   promptEnabled: boolean
   defaultTimeoutMs: number
+  /** Per-round wait extension while the target session still shows activity. */
+  timeoutExtensionMs: number
+  /** Cap on extension rounds before a still-active delegation is settled as timeout. */
+  maxTimeoutExtensions: number
   delegationRecords: boolean
   pinnedTitles: boolean
   targets: Map<string, ResolvedTarget>
@@ -68,8 +78,13 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
   const toolName = input.toolName ?? 'delegate_workspace'
   if (!/^[a-zA-Z0-9_-]+$/.test(toolName)) throw new TypeError('toolName must contain only letters, numbers, underscores or hyphens')
   const defaultTimeoutMs = input.defaultTimeoutMs ?? 300_000
-  if (!Number.isSafeInteger(defaultTimeoutMs) || defaultTimeoutMs <= 0 || defaultTimeoutMs > 2_147_483_647) {
-    throw new TypeError('defaultTimeoutMs must be a positive integer <= 2147483647')
+  const timeoutExtensionMs = input.timeoutExtensionMs ?? 120_000
+  const maxTimeoutExtensions = input.maxTimeoutExtensions ?? 10
+  for (const ms of [defaultTimeoutMs, timeoutExtensionMs]) {
+    if (!Number.isSafeInteger(ms) || ms <= 0 || ms > 2_147_483_647) throw new TypeError('defaultTimeoutMs/timeoutExtensionMs must be positive integers <= 2147483647')
+  }
+  if (!Number.isSafeInteger(maxTimeoutExtensions) || maxTimeoutExtensions <= 0 || maxTimeoutExtensions > 10_000) {
+    throw new TypeError('maxTimeoutExtensions must be a positive integer <= 10000')
   }
   for (const key of ['promptEnabled', 'shareSessionStore', 'delegationRecords', 'pinnedTitles'] as const) {
     if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new TypeError(`${key} must be boolean`)
@@ -108,5 +123,5 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
     targets.set(name, { ...target, cwd, args: [...target.args ?? []], env, provider, model,
       providerName: `workspace-chain:${toolName}:${name}` })
   }
-  return { shareSessionStore: input.shareSessionStore ?? true, toolName, promptEnabled: input.promptEnabled ?? true, defaultTimeoutMs, delegationRecords: input.delegationRecords ?? true, pinnedTitles: input.pinnedTitles ?? true, targets }
+  return { shareSessionStore: input.shareSessionStore ?? true, toolName, promptEnabled: input.promptEnabled ?? true, defaultTimeoutMs, timeoutExtensionMs, maxTimeoutExtensions, delegationRecords: input.delegationRecords ?? true, pinnedTitles: input.pinnedTitles ?? true, targets }
 }

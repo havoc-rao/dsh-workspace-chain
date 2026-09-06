@@ -57,7 +57,7 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
   resume.md    恢复说明 + 可直接使用的续跑任务书样例
 ```
 
-`delegationId` 形如 `dlg-<YYYYMMDD>-<8hex>`。任务原文交付时附带一个简短信封，向目标会话声明委托 id 与进度文件路径，并要求：**每完成一个可验证步骤向 `progress.md` 追加一行 `- <步骤简述>`，结束时追加 `- [result] <结果摘要>`，不改写已有行**；进度文件不可写时任务照常执行，不因协议失败中断。
+`delegationId` 形如 `dlg-<YYYYMMDD>-<8hex>`。任务原文交付时附带一个简短信封，向目标会话声明委托 id 与进度文件路径，并要求：**每完成一个可验证步骤向 `progress.md` 追加一行 `- <步骤简述>`，长耗时步骤（构建、测试、等待外部结果等）开始时也追加一行 `- <步骤>…` 并保持周期性追加（活跃心跳，让父侧能确认会话仍在工作），结束时追加 `- [result] <结果摘要>`，不改写已有行**；进度文件不可写时任务照常执行，不因协议失败中断。信封同时告知：父侧超时是活动感知的，只要进度文件或会话日志持续有新内容，等待会自动顺延。
 
 **过程可见性**：后台 job 的 `job_output` 在运行中返回 progress.md 摘要（`delegation dlg-… · N checkpoints` + 尾部若干行），结算后返回最终输出——运行中的委派不再显示 `(no new output)`。前台失败/超时的诊断同样内嵌 checkpoint 路径与尾部摘要。
 
@@ -72,14 +72,14 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
 - `Checkpoint:` / `Task record:` / `Resume:` 三个文件路径及 progress 尾部摘要。
 - `elapsed <ms>` 已等待时长。
 
-分类依据（顺序即优先级）：插件自身 deadline 触发 → `timeout`；调用方信号被中止（父会话打断、`job_kill`）→ `cancelled`；child stopReason `error` → `crash`；无我方信号的自发 `aborted` → `host-reclaim`（宿主回收/手动停止/未知宿主侧原因）；`max-tokens`/`refusal` 单独标记；其余 → `failed`。
+分类依据（顺序即优先级）：插件自身活动感知 deadline 触发（目标持续无产出或扩展轮数用尽）→ `timeout`；调用方信号被中止（父会话打断、`job_kill`）→ `cancelled`；child stopReason `error` → `crash`；无我方信号的自发 `aborted` → `host-reclaim`（宿主回收/手动停止/未知宿主侧原因）；`max-tokens`/`refusal` 单独标记；其余 → `failed`。
 
 **区分两个 "aborted"**（现场 `Error: wait aborted` 与任务 `aborted` 不是一回事）：
 
 1. `job_output wait: true` 到达宿主 `tool-jobs` 的等待上限 → **正常返回** `[status: running]` + 上述 progress 摘要（不是报错），可继续非阻塞读取或 `job_list` 查看。
 2. `Error: wait aborted` 由宿主 `tool-jobs` 在**调用方本轮执行信号被宿主中止**时抛出（父会话被打断/取消/回收）——任务仍在运行，重新 `job_output`（不带 wait）或 `job_list` 即可。`waitTimeoutMs`/`maxWaitTimeoutMs` 属宿主配置。
 
-**护栏**：前台调用同样受 `timeout_ms`（默认 `defaultTimeoutMs` 300000ms，本地路径与 SDK 路径一致生效）约束，超时自动 `sessions.cancel` 子会话并按 `timeout` 分类返回；执行中被父侧信号中止则按 `cancelled` 分类返回，两种情况下宿主都保留子会话、`resume.md` 给出续跑指引。长任务建议 `run_in_background: true`。参数新增可选 `timeout_ms`（正整数毫秒），仅扩展、不破坏旧调用。
+**护栏（活动感知超时）**：前台/后台统一受 `timeout_ms`（默认 `defaultTimeoutMs` 300000ms，本地/SDK 路径一致生效）约束，但这不是硬上限——到点先探测目标会话是否仍在工作：本地 agent `status === 'running'`、`<DSH_HOME>/sessions` 目录近期有写入、或 `progress.md` 出现目标侧新增的 checkpoint 行（插件自身 `[init]`/`[start]`/`[extend]` 生命周期行不算），任一命中即自动顺延一个 `timeoutExtensionMs`（默认 120000ms）窗口，累计最多 `maxTimeoutExtensions`（默认 10）轮；只有目标**长时间无任何产出**或扩展轮数用尽，才 `sessions.cancel` 子会话并按 `timeout` 分类返回，诊断 detail 会写明停等时长与最后观测到的活动（`[extend]` checkpoint 行也进入 progress，`job_output` 可实时看到顺延过程）。执行中被父侧信号中止则按 `cancelled` 分类返回。两种情况下宿主都保留子会话、`resume.md` 给出续跑指引。长任务建议 `run_in_background: true`；可并行的子任务应先挂后台再继续其他工作。参数新增可选 `timeout_ms`（正整数毫秒），仅扩展、不破坏旧调用。
 
 ## 可选 SDK 配置
 
@@ -91,6 +91,8 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
     toolName: delegate_workspace
     promptEnabled: true
     defaultTimeoutMs: 300000
+    timeoutExtensionMs: 120000
+    maxTimeoutExtensions: 10
     shareSessionStore: true
     targets:
       project-b:
@@ -125,6 +127,8 @@ child bin 不传配置参数时使用包内 `src/child.cordis.yml`。该组合�
 ## 工具与后处理
 
 参数：`target: string`、`task: string`、`run_in_background?: boolean`、`timeout_ms?: number`（覆盖默认超时，默认 `defaultTimeoutMs`，本地/SDK 路径均生效）、`title?: string`（可选，自定义固定会话标题，如 `绘画/画一只猫`；缺省为任务摘要，仅本地路径有 rename 效果，SDK 路径只写入任务书）。task 应含相关上游结果、目标文件、预期行为和验收标准；不复制 A 的全部历史。
+
+**并行建议**：同一请求可拆成多个互不依赖的子任务时（例如只等对方返回某个 key / 契约名，或改动互不干扰的多个工作区），对可并行的部分用 `run_in_background: true` 挂后台、继续处理其他事情，最后统一用 `job_output` 收取结果并整合；只有下一步必须依赖其结果时才前台等待。工具描述与 invocation hint 已内置这一决策规则，超时活动感知语义见上文「失败诊断与等待语义」。
 
 前台成功的规范值包含 `{ kind: 'foreground', runId, output, sessionId?, delegationId?, checkpointPath? }`（本地路径包含真实 sessionId，用于 UI 元信息，不混入模型的结果文本；`delegationId`/`checkpointPath` 指向该次委派记录），模型读到 B 的最终文本；非 completed 的 stop reason 返回工具错误，错误携带分类诊断与记录路径。完成与失败均等待运行收尾；本地路径保留宿主会话，SDK 路径释放子进程。后台使用 parent-owned jobs，成功输出经 `job_output` 返回，运行中可经 `job_output` 读 checkpoint 摘要；取消和超时传递到 provider，结算 detail 含分类诊断（`timeout`/`cancelled`/`crash`/`host-reclaim` 等），清理失败不会被当成成功。
 

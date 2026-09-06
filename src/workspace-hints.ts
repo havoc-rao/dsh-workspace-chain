@@ -29,7 +29,7 @@ export function workspaceHandoff(query: string, workspaces: readonly WorkspaceRe
   if (!selected.length) return { text: `${context}\n当前无法委派：引用未解析到已登记的工作区。请指出该问题，不要猜测路径或启动命令。` }
   if (!targets.length) return { text: `${context}\n当前无法委派：DSH 本地会话 API 不可用，且目标没有配置 SDK 执行器。可识别项目不等于可以向它发送任务。请直接说明接口不可用，不能确认已发送；不要读取本插件 README/源码来寻找发送方式，也不要代为写入“你好”文件。` }
   if (!available) return { text: `${context}\n当前无法委派：目标已配置，但本会话的工具可见性或调用模式不允许原生委派。请报告此限制，不要改用未授权的启动方式。` }
-  return { text: `${context}\n可用目标名：${JSON.stringify(targets)}。用户要求在这些项目中执行任务时，由当前会话调用下述委派工具交付，并等待执行结果。`,
+  return { text: `${context}\n可用目标名：${JSON.stringify(targets)}。用户要求在这些项目中执行任务时，由当前会话调用下述委派工具交付，并等待执行结果。可并行的子任务（如只等对方返回一个 key / 契约名）用 run_in_background: true 挂后台、继续其他工作，最后统一用 job_output 收取；结果未返回前不得宣称完成。`,
     ...targets.length === 1 && task ? { example: { target: targets[0]!, task } } : {} }
 }
 export function workspaceHint(query: string, workspaces: readonly WorkspaceReferenceContext[], config: ResolvedConfig, toolAvailable = true, nativeAvailable = true): string | undefined {

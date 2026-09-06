@@ -10,6 +10,8 @@ describe('configuration', () => {
   it('accepts an empty allowlist and applies loader defaults', () => {
     expect(resolveConfig(Config({})).targets.size).toBe(0)
     expect(resolveConfig().defaultTimeoutMs).toBe(300000)
+    expect(resolveConfig().timeoutExtensionMs).toBe(120000)
+    expect(resolveConfig().maxTimeoutExtensions).toBe(10)
   })
   it('canonicalizes cwd and explicitly forwards shared home without ambient secrets', () => {
     const root = directory(); mkdirSync(join(root, 'project')); symlinkSync(join(root, 'project'), join(root, 'alias'))
@@ -31,5 +33,8 @@ describe('configuration', () => {
       expect(() => resolveConfig({ targets: { b: target } } as never)).toThrow()
     }
     for (const ms of [0, -1, NaN, Infinity, 0.5, 2147483648]) expect(() => resolveConfig({ defaultTimeoutMs: ms })).toThrow()
+    for (const ms of [0, -1, NaN, Infinity, 0.5, 2147483648]) expect(() => resolveConfig({ timeoutExtensionMs: ms })).toThrow()
+    for (const count of [0, -1, NaN, Infinity, 0.5, 10001]) expect(() => resolveConfig({ maxTimeoutExtensions: count })).toThrow()
+    expect(resolveConfig({ timeoutExtensionMs: 30000, maxTimeoutExtensions: 3 })).toMatchObject({ timeoutExtensionMs: 30000, maxTimeoutExtensions: 3 })
   })
 })

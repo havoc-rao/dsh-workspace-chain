@@ -82,7 +82,7 @@ A 会话（工作区 W1, 宿主 dsh 进程）
   config:
     toolName: delegate_workspace
     promptEnabled: true                    # 是否注入 4.4 的提示段
-    defaultTimeoutMs: 300000               # 单次委托上限（走 AbortSignal.timeout）
+    defaultTimeoutMs: 300000               # base 等待窗口（2026-09-07 起为活动感知：到点后目标仍有产出则按 timeoutExtensionMs 顺延，见 status.md）
     shareSessionStore: true                # 子进程 DSH_HOME = 父 DSH_HOME（见 4.6）
     targets:
       project-b:

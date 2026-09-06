@@ -50,4 +50,6 @@ NODE_ENV=development pnpm build
 - `record.title` 与传给 `sessions.rename` 的标题必须一致（`pinnedTitles: false` 时只记录不 rename）。
 - 后台 job 必须提供 `readOutput`：运行中返回 progress.md 摘要，结算后返回最终输出（保持"运行中有可见性、结算有最终结果"两侧语义）。
 - 前台/后台失败消息与 job detail 必须包含：Classification、transcript 位置（`sessionStoreHint`）、Checkpoint/Task/Resume 三路径、elapsed。
+- 超时是活动感知的（`src/patience.ts` 的 `adaptiveDeadline`，不得退回硬超时）：`timeout_ms`（默认 `defaultTimeoutMs`）到点后若目标会话仍有产出——本地 agent `status === 'running'`、`<DSH_HOME>/sessions` 近期写入、progress.md 出现目标侧 `- ` checkpoint 行（插件自身 `[init]`/`[start]`/`[extend]` 行不算）——按 `timeoutExtensionMs` 顺延一轮，累计上限 `maxTimeoutExtensions` 轮；持续静默或轮数用尽才按 `timeout` 结算。调用方信号中止时探测定时器必须停（不得把 cancelled 误判成 timeout）。
+- 任务书进度协议支持活跃心跳：长耗时步骤（构建、测试、等待外部结果等）开始时也追加一行 `- <步骤>…` 并周期性更新，让父侧可观测"对方仍在工作"。
 - 工具参数与返回只能扩展（如 `timeout_ms`、`delegationId`、`checkpointPath`），不得破坏旧字段。

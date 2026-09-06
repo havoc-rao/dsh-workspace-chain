@@ -5,6 +5,7 @@ import type { JobOutcome } from '@deepseek-ai/dsh-jobs'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { startNativeRun } from './native.js'
 import { checkDirectory, type ResolvedConfig } from './config.js'
+import { adaptiveDeadline, probeActivity } from './patience.js'
 import {
   appendProgress, classifyDelegation, composeTask, deriveDelegationTitle, finalizeRecord, newDelegationId,
   progressSummary, sessionStoreHint, updateSessionIdentity, writeDelegationRecord, STATUS_LABEL,
@@ -39,19 +40,22 @@ export async function collectRun(run: SubagentRun): Promise<string> {
   return output
 }
 
-function deadline(ms: number, signal: AbortSignal) {
-  const controller = new AbortController()
-  let expired = false
-  const timer = setTimeout(() => {
-    expired = true
-    controller.abort(new Error(`workspace delegation timed out after ${ms}ms`))
-  }, ms)
-  timer.unref()
-  return {
-    signal: AbortSignal.any([signal, controller.signal]),
-    dispose: () => clearTimeout(timer),
-    expired: () => expired,
-  }
+/**
+ * Activity-aware deadline for a delegation run: the base window is
+ * `timeoutMs`, and every round while the target still shows activity extends
+ * the wait by `timeoutExtensionMs` (up to `maxTimeoutExtensions` rounds).
+ * Timeout is declared only after a full extension window of silence.
+ */
+function patienceFor(config: ResolvedConfig, record: DelegationRecord | undefined, dshHome: string, signal: AbortSignal, timeoutMs: number, run: () => SubagentRun | undefined) {
+  return adaptiveDeadline({
+    baseMs: timeoutMs,
+    extensionMs: config.timeoutExtensionMs,
+    maxExtensions: config.maxTimeoutExtensions,
+    signal,
+    probe: () => probeActivity({ record, run, dshHome, freshMs: config.timeoutExtensionMs }),
+    onExtend: (extension, probe) => appendProgress(record,
+      `[extend] target still active (${probe.detail}); wait extended ${extension}/${config.maxTimeoutExtensions} (+${config.timeoutExtensionMs}ms)`),
+  })
 }
 
 function checkedTimeout(value: number | undefined, fallback: number): number {
@@ -70,6 +74,8 @@ interface RunState {
   startedAt: number
   dshHome: string
   timeoutExpired: () => boolean
+  /** Why the activity-aware deadline expired (missing unless a terminal timeout hit). */
+  timeoutReason?: () => string | undefined
   canceled: () => boolean
 }
 
@@ -92,9 +98,10 @@ function diagnose(state: RunState, error: unknown, sessionId?: string, runId?: s
   const stopReason = error instanceof DelegationFailure ? error.stopReason : undefined
   const crashed = !(error instanceof DelegationFailure) && !(error instanceof AggregateError) ? error : undefined
   const status = classifyDelegation({ stopReason, timeout: state.timeoutExpired(), canceled: state.canceled(), crashed })
+  const timeoutReason = status === 'timeout' ? state.timeoutReason?.() : undefined
   return {
     status,
-    detail: String(error),
+    detail: timeoutReason ? `${String(error)}\n${timeoutReason}` : String(error),
     ...sessionId !== undefined ? { sessionId } : {},
     ...runId !== undefined ? { runId } : {},
     elapsedMs: Date.now() - state.startedAt,
@@ -137,12 +144,12 @@ function enrich(error: unknown, diag: DelegationDiagnostic): DelegationFailure {
 export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
   return defineTool({
     name: config.toolName,
-    description: 'Delegate a self-contained task to a fresh agent session in a registered local workspace. Wait for its final output, or return a background job id to collect with job_output and stop with job_kill. Long tasks should use run_in_background: true: foreground waits are bounded by timeout_ms / defaultTimeoutMs, and an interrupted foreground call cancels the child session (the host retains it — the failure report points to the delegation record and resume instructions). Every delegation writes a task book and progress checkpoints under <workspace>/.dsh/delegations/<delegationId>/',
+    description: 'Delegate a self-contained task to a fresh agent session in a registered local workspace. Wait for its final output, or return a background job id to collect with job_output and stop with job_kill.\nParallel scheduling: launch work that is independent of your current steps in the background — e.g. you only need a contract the other side returns (a key name, an API shape) and can keep working on adjacent steps meanwhile — with run_in_background: true, continue your own work, then collect with job_output (wait: true to block) before claiming completion. Use the foreground wait only when the next step cannot proceed without this result.\nTimeouts are activity-aware, not hard caps: while the target keeps producing (a live local agent, session-store writes, or progress checkpoints) the wait extends in timeoutExtensionMs rounds up to maxTimeoutExtensions; a timeout is declared only after the target has been silent for a full extension window. An interrupted foreground call cancels the child session (the host retains it — the failure report points to the delegation record and resume instructions). Every delegation writes a task book and progress checkpoints under <workspace>/.dsh/delegations/<delegationId>/',
     parameters: {
       target: { type: 'string', required: true, description: `Registered workspace absolute path, or an explicit SDK target name. Configured SDK targets: ${[...config.targets.keys()].join(', ')}.` },
       task: { type: 'string', required: true, description: 'Standalone task including context, files, goals and acceptance criteria. The target is a fresh session with no knowledge of this conversation.' },
-      run_in_background: { type: 'boolean', description: 'Return a job id immediately; collect with job_output. Default false: wait for the final output.' },
-      timeout_ms: { type: 'number', description: 'Override the configured defaultTimeoutMs for this call (positive integer ms). On timeout / cancellation the target session is cancelled, the delegation record explains how to resume, and the session stays open in the host.' },
+      run_in_background: { type: 'boolean', description: 'Return a job id immediately; collect with job_output (wait: true to block up to the host wait cap) and cancel with job_kill. Default false: wait for the final output. Prefer true for tasks that can run in parallel with your remaining work; the foreground wait blocks until settlement or timeout.' },
+      timeout_ms: { type: 'number', description: 'Override the configured defaultTimeoutMs for this call (positive integer ms). The target is cancelled only after the activity check: while it keeps producing, the wait extends by timeoutExtensionMs per round (maxTimeoutExtensions rounds); timeout is declared after a full silent extension window. On timeout / cancellation the delegation record explains how to resume, and the session stays open in the host.' },
       title: { type: 'string', description: 'Optional pinned title for the created session (local path only, requires host sessions.rename). Defaults to `<project>/<task summary>`, e.g. `dsh-remote/改造 cordis 配置`, so the workspace session list shows the concrete task.' },
     },
     output: {
@@ -199,16 +206,16 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
           kind: 'subagent', label: request.label, owner: parent,
           run: () => {
             const controller = new AbortController()
-            const timeout = deadline(timeoutMs, controller.signal)
+            let run: SubagentRun | undefined
+            const timeout = patienceFor(config, record, dshHome, controller.signal, timeoutMs, () => run)
             // startedAt is stamped once, up front, so elapsed reflects the full wait.
-            const state: RunState = { mode, record, startedAt: Date.now(), dshHome, timeoutExpired: timeout.expired, canceled: () => controller.signal.aborted }
+            const state: RunState = { mode, record, startedAt: Date.now(), dshHome, timeoutExpired: timeout.expired, timeoutReason: timeout.reason, canceled: () => controller.signal.aborted }
             let terminal: { output?: string } | undefined
             // Live visibility: job_output reads this while the job runs (and
             // the final output after it settles), so a running delegation
             // never looks empty.
             const readOutput = () => terminal?.output ?? progressSummary(record)
             const done = (async (): Promise<JobOutcome> => {
-              let run: SubagentRun | undefined
               let published = false
               try {
                 run = await start(timeout.signal)
@@ -235,9 +242,9 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
         })
         return { kind: 'background' as const, jobId, ...record ? { delegationId: record.delegationId, checkpointPath: record.progressPath } : {} }
       }
-      const timeout = deadline(timeoutMs, exec.signal)
-      const state: RunState = { mode, record, startedAt: Date.now(), dshHome, timeoutExpired: timeout.expired, canceled: () => exec.signal.aborted }
       let run: SubagentRun | undefined
+      const timeout = patienceFor(config, record, dshHome, exec.signal, timeoutMs, () => run)
+      const state: RunState = { mode, record, startedAt: Date.now(), dshHome, timeoutExpired: timeout.expired, timeoutReason: timeout.reason, canceled: () => exec.signal.aborted }
       try {
         run = await start(timeout.signal)
         identity(run)
