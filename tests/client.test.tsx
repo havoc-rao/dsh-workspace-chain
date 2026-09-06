@@ -35,6 +35,13 @@ it('keeps background admission distinct from a completed result', () => {
   expect(background.element.textContent).not.toContain('已返回结果')
   expect(background.element.querySelector('button')).toBeNull()
 })
+it('shows the preallocated session id on background rows and a return-to-session marker for session_id calls', () => {
+  const background = render({ kind: 'tool-result', callId: 'bg', call: { argsRaw: '{"target":"backend","task":"x"}' }, content: [], isError: false, meta: { jobId: 'job-1', sessionId: 'session-planned-1' } })
+  expect(background.element.textContent).toContain('目标会话 session-planned-1')
+  const continued = render({ kind: 'tool-result', callId: 'cont', call: { argsRaw: '{"target":"backend","task":"y","session_id":"session-retained-2"}' }, content: [{ type: 'text', text: 'done' }], isError: false, meta: { sessionId: 'session-retained-2' } })
+  expect(continued.element.textContent).toContain('返回会话 session-retained-2')
+  expect(continued.element.textContent).not.toContain('目标会话')
+})
 
 import { vi } from 'vitest'
 import { ReferenceMenu, type ReferenceMenuProps } from '../src/client/ReferenceMenu.js'

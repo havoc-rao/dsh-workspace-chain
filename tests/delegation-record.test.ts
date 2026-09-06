@@ -49,6 +49,27 @@ describe('delegation record', () => {
     expect(taskBook.runId).toBe('run-1')
     expect(readFileSync(record.taskPath, 'utf8')).toContain('session-child')
   })
+  it('makes the known session id the primary resume path with a ready-to-use session_id sample', () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'chain-record-')); roots.push(workspacePath)
+    const record = writeDelegationRecord({
+      delegationId: newDelegationId(), mode: 'local', target: workspacePath, workspacePath,
+      parentSessionId: 'parent', createdAt: new Date().toISOString(), task: 'x', sessionId: 'session-child',
+    })
+    const resume = readFileSync(record.resumePath, 'utf8')
+    expect(resume).toContain('回到同一会话')
+    expect(resume).toContain('session_id')
+    const sample = JSON.parse(resume.match(/```json\n([\s\S]*?)\n```/)![1]!)
+    expect(sample).toMatchObject({ name: 'delegate_workspace', arguments: { target: record.target, session_id: 'session-child', run_in_background: true } })
+    expect(sample.arguments.task).toContain('session_id 已回到同一会话')
+  })
+  it('keeps session_id out of the resume sample and numbers the fallback path when no session id is known yet', () => {
+    const { record } = recordFixture()
+    const resume = readFileSync(record.resumePath, 'utf8')
+    expect(resume).not.toContain('session_id')
+    const sample = JSON.parse(resume.match(/```json\n([\s\S]*?)\n```/)![1]!)
+    expect('session_id' in sample.arguments).toBe(false)
+    expect(resume).toContain('3. 在同一工作区新开会话')
+  })
   it('appends checkpoints, bounds summaries and finalizes with a result line', () => {
     const { record } = recordFixture()
     appendProgress(record, 'read the codebase')

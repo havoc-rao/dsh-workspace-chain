@@ -7,7 +7,7 @@
 1. 输入 `@`，从 workspace-chain 候选中选择目标；输入框显示工作区引用标签，工作区引用保存 ID 与名称快照；显式 SDK target 仍使用 `@workspace/project-b`。
 2. 服务端识别当前 query 中的目标引用、名称和 `aliases`；明确的“继续／刚才那个项目”追问可关联最近六条用户消息。只分析用户消息，不把工具输出当成用户选择。
 3. 注入可落日志的 hint，提醒模型结合当前请求、已有对话、目标职责与上游结果作判断。**提及一个项目不等于要求执行**；是否委托仍由 agent 判断。
-4. 模型调用 `delegate_workspace`。默认通过宿主 `ctx.apiProxy.sessions.create({ workspaceId, agentPreset })` 创建真实会话，再由 `sessions.prompt` 交付自包含任务。新会话使用宿主默认模型和父会话当前 preset，自动归入目标工作区；只显式配置的 SDK target 使用独立进程。
+4. 模型调用 `delegate_workspace`。默认通过宿主 `ctx.apiProxy.sessions.create({ workspaceId, agentPreset })` 创建真实会话（**会话 ID 在调用时预分配，后台响应与委派记录即时携带**），再由 `sessions.prompt` 交付自包含任务；传 `session_id` 时改为直接回复上次发布的同一会话。新会话使用宿主默认模型和父会话当前 preset，自动归入目标工作区；只显式配置的 SDK target 使用独立进程。
 5. 前台结果直接回给 A；后台返回 job ID，由 `job_output` 收取、`job_kill` 取消。A 核对完成状态、整合结果，再回答原始请求。UI 显示目标、运行／失败／结果已返回状态和可展开的任务、结果。
 
 空 targets 也注册后端执行能力，但不加入顶层 tools 或 system prompt。命中 query 时，在后续消息中提供 `delegate_workspace` 的工具名、参数和原生 tool-call 调用说明，不依赖 run_code。支持原生调用的 native/standard 与 both 模式；宿主强制 code-only 的模式仍由宿主管理，插件不改其执行策略。后续上下文中的声明不等于所有模型供应商都支持未列入顶层 tools 的调用，需以实际模型验收为准。
@@ -45,6 +45,8 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
 
 宿主拥有新会话及其持久化生命周期；任务结束后保留会话，可从工作区列表打开并继续。**会话标题固定**：`sessions.create` 不支持 title 字段，但宿主提供 `sessions.rename`——插件在创建后立即调用它把标题固定为**任务摘要**（任务首行去格式后截断 40 字符，如 `改造 cordis.patch.yml 配置…`），让工作区会话列表直接显示"这个会话在做什么具体任务"；会话已在目标工作区分组下，标题不重复工作区名。想要 `类别/任务` 形式（如 `绘画/画一只猫`）时，在调用中显式传 `title` 即可完全自定义。`pinnedTitles: false` 可关闭（标题回退为宿主自动生成）。rename 事件不开启 turn、不清除 blank 标记；老宿主无 `rename` 或标题被拒时只记录 progress 行，不影响委派。取消/超时调用 `sessions.cancel`，失败和部分输出如实回传。插件不调用 `selectModel`，避免该接口连带修改宿主全局默认模型。当前会话的有效 preset 通过 `sessions.list` 读取。递归委派最多四层。
 
+**会话 ID 创建即得，可随时回到同一会话**：本地委派的会话 ID 由插件在调用入口**预分配**（`session-<uuid>`，宿主 `sessions.create` 契约支持显式 ID 且重试同名同工作区返回同一会话）——后台 job 的初始响应与委派记录在**任务尚未启动**时就携带 `sessionId`，进度行 `session created <id>` 确认会话落地；若老宿主拒绝预分配，自动回退为宿主生成 ID 并如实记录（以返回值/记录为准）。因此上一会话还在运行、刚刚创建、或已经超时/失败，父侧都持有它的 ID 与元数据（`delegationId`、进度/任务书/resume 路径）。要继续它时，把该 ID 作为 **`session_id`** 参数再次调用 `delegate_workspace`：任务直接送进**同一会话**（宿主幂等 adopt/resume，保留原上下文、preset 与标题，不新建会话）；会话仍在运行则消息排队等它空闲。这是重新委派的默认推荐路径——新开会话只会在目标跨会话上下文确实缺失时使用。
+
 ## 委派记录与进度协议（checkpoint）
 
 每次 `delegate_workspace` 调用（前台/后台、本地/SDK 路径一致）都会在**目标工作区**写入一份委派记录；`delegationRecords: false` 可整体关闭（关闭后恢复旧行为：任务原文原样交付、无 checkpoint、失败只回传 session id）。
@@ -61,7 +63,7 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
 
 **过程可见性**：后台 job 的 `job_output` 在运行中返回 progress.md 摘要（`delegation dlg-… · N checkpoints` + 尾部若干行），结算后返回最终输出——运行中的委派不再显示 `(no new output)`。前台失败/超时的诊断同样内嵌 checkpoint 路径与尾部摘要。
 
-**恢复路径**：abort/失败后父会话不需要从零重写任务书。`resume.md` 给出两种续跑方式：(1) 宿主界面从目标工作区的会话列表打开保留会话直接继续（原上下文完整）；(2) 在同一工作区新开会话，先读 `task.md` 与 `progress.md`，用 `git status`/diff 与生成产物核对现场，确定未完成步骤后重新委派——`resume.md` 内已含可直接使用的续跑任务书样例（新会话读任务文件 + 现场后继续，验收完成后报告）。
+**恢复路径**：abort/失败后父会话不需要从零重写任务书。`resume.md` 记录目标会话 ID（调用时即预分配落盘）与三种续跑方式：(1) **推荐——回到同一会话**：再次调用 `delegate_workspace` 并传 `session_id: <会话 ID>`，新任务直接送进保留会话，上下文与现场完整（`resume.md` 内已含可直接使用的续跑调用样例）；(2) 宿主界面从目标工作区的会话列表打开保留会话继续；(3) 会话不可用（如被宿主回收）时，在同一工作区新开会话，先读 `task.md` 与 `progress.md`，用 `git status`/diff 与生成产物核对现场，确定未完成步骤后重新委派。
 
 ## 失败诊断与等待语义
 
@@ -126,11 +128,11 @@ child bin 不传配置参数时使用包内 `src/child.cordis.yml`。该组合�
 
 ## 工具与后处理
 
-参数：`target: string`、`task: string`、`run_in_background?: boolean`、`timeout_ms?: number`（覆盖默认超时，默认 `defaultTimeoutMs`，本地/SDK 路径均生效）、`title?: string`（可选，自定义固定会话标题，如 `绘画/画一只猫`；缺省为任务摘要，仅本地路径有 rename 效果，SDK 路径只写入任务书）。task 应含相关上游结果、目标文件、预期行为和验收标准；不复制 A 的全部历史。
+参数：`target: string`、`task: string`、`run_in_background?: boolean`、`timeout_ms?: number`（覆盖默认超时，默认 `defaultTimeoutMs`，本地/SDK 路径均生效）、`title?: string`（可选，自定义固定会话标题，如 `绘画/画一只猫`；缺省为任务摘要，仅本地路径有 rename 效果，SDK 路径只写入任务书）、`session_id?: string`（**仅本地路径**：回到已发布的同一会话继续——把上次委派返回/记录的会话 ID 传入，任务直接送进该保留会话，不新建；详见「默认本地 API 路径」）。SDK target 传 `session_id` 会明确报错。task 应含相关上游结果、目标文件、预期行为和验收标准；不复制 A 的全部历史。
 
 **并行建议**：同一请求可拆成多个互不依赖的子任务时（例如只等对方返回某个 key / 契约名，或改动互不干扰的多个工作区），对可并行的部分用 `run_in_background: true` 挂后台、继续处理其他事情，最后统一用 `job_output` 收取结果并整合；只有下一步必须依赖其结果时才前台等待。工具描述与 invocation hint 已内置这一决策规则，超时活动感知语义见上文「失败诊断与等待语义」。
 
-前台成功的规范值包含 `{ kind: 'foreground', runId, output, sessionId?, delegationId?, checkpointPath? }`（本地路径包含真实 sessionId，用于 UI 元信息，不混入模型的结果文本；`delegationId`/`checkpointPath` 指向该次委派记录），模型读到 B 的最终文本；非 completed 的 stop reason 返回工具错误，错误携带分类诊断与记录路径。完成与失败均等待运行收尾；本地路径保留宿主会话，SDK 路径释放子进程。后台使用 parent-owned jobs，成功输出经 `job_output` 返回，运行中可经 `job_output` 读 checkpoint 摘要；取消和超时传递到 provider，结算 detail 含分类诊断（`timeout`/`cancelled`/`crash`/`host-reclaim` 等），清理失败不会被当成成功。
+前台成功的规范值包含 `{ kind: 'foreground', runId, output, sessionId?, delegationId?, checkpointPath? }`（本地路径包含真实 sessionId，用于 UI 元信息，不混入模型的结果文本；`delegationId`/`checkpointPath` 指向该次委派记录），模型读到 B 的最终文本；非 completed 的 stop reason 返回工具错误，错误携带分类诊断与记录路径。完成与失败均等待运行收尾；本地路径保留宿主会话，SDK 路径释放子进程。后台使用 parent-owned jobs，成功输出经 `job_output` 返回，运行中可经 `job_output` 读 checkpoint 摘要；**本地路径的后台响应同样携带 `sessionId`（预分配，job 启动前即已知，进度行 `session created <id>` 确认落地）**，取消和超时传递到 provider，结算 detail 含分类诊断（`timeout`/`cancelled`/`crash`/`host-reclaim` 等），清理失败不会被当成成功。失败/超时诊断中的 `Target session:` 与 `resume.md` 给出同一会话 ID——配合 `session_id` 参数即可直接回复该会话。
 
 后处理是现有 agent loop 的工具结果回流，加上 prompt/hint 中的核对、整合要求；没有另起一个模型改写器，也没有 turn 结束后自动触发下一次委托。这样返回结果不会自行形成无限工作区链。
 
@@ -155,7 +157,7 @@ child bin 不传配置参数时使用包内 `src/child.cordis.yml`。该组合�
 - 用例 A（结构化失败）：对任意本地工作区委派一个长任务（跨仓库改动+构建+测试），前台与后台各一次，观察超时后返回 `Classification: timeout` + elapsed + checkpoint/resume 路径，而非裸 `aborted`。
 - 用例 B（过程可见）：任务进行中调 `job_output`，应读到 `delegation dlg-… · N checkpoints` 摘要（含目标会话的步骤行；无输出行则说明协议未生效）。
 - 用例 C（等待语义）：`job_output wait: true` 超过宿主 wait 上限 → `[status: running]` + 摘要；若出现 `Error: wait aborted`，说明父侧信号被宿主中止，任务仍在跑，重新 `job_output`/`job_list` 验证。
-- 用例 D（恢复）：abort 后阅读 `<workspace>/.dsh/delegations/<id>/resume.md`，按样例在新会话续跑（读 task.md + progress.md，检查 git status/diff 与产物后继续）。
+- 用例 D（恢复）：abort 后阅读 `<workspace>/.dsh/delegations/<id>/resume.md`，用其中样例（含 `session_id`）再次调用 `delegate_workspace`，确认任务被同一会话接收续跑（会话列表不新增条目）；会话不可用时再按样例 3 的方式新开会话续跑。
 - 宿主侧（P6）：核对会话回收策略与 `tool-jobs` wait 配置（见"宿主侧待核查"）。
 
 ## 分层引用与拖放

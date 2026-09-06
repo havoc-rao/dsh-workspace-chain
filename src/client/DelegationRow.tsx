@@ -17,7 +17,13 @@ export function DelegationRow({ block, inspect }: ToolCallViewProps) {
   const failed = settled && block.isError
   const delegationId = typeof meta.delegationId === 'string' ? meta.delegationId : undefined
   const checkpoint = typeof meta.checkpointPath === 'string' ? meta.checkpointPath : undefined
+  const sessionId = typeof meta.sessionId === 'string' ? meta.sessionId : undefined
+  const continuing = typeof args.session_id === 'string' ? args.session_id : undefined
   const recordLine = delegationId ? `委派记录 ${delegationId}${checkpoint ? ` · 进度 ${checkpoint}` : ''}` : undefined
+  const sessionLine = continuing
+    ? `返回会话 ${continuing}`
+    : sessionId ? `目标会话 ${sessionId}` : undefined
+  const metaLine = [sessionLine, recordLine].filter(Boolean).join(' · ')
   const state = !settled ? 'running' : failed ? 'error' : background ? 'background' : 'complete'
   const status = !settled ? '正在委派' : failed ? '委派失败' : background ? '后台已启动' : '已返回结果'
   const output = settled ? block.content.filter(b => b.type === 'text').map(b => b.text).join('\n') : ''
@@ -33,7 +39,7 @@ export function DelegationRow({ block, inspect }: ToolCallViewProps) {
     </div>
     {task && <details className="chain-task"><summary><Chevron /><span className="chain-label">委派任务</span><span className="chain-preview">{preview(task)}</span></summary><div className="chain-content">{task}</div></details>}
     {output && (!background || failed) && <details className="chain-result" open={Boolean(failed)}><summary><Chevron /><span className="chain-label">{failed ? '失败原因' : '执行结果'}</span><span className="chain-preview">{preview(output)}</span></summary><div className="chain-content">{output}</div></details>}
-    {background && !failed && <p className="chain-background">任务已转入后台，完成后由当前对话收取结果。{recordLine ?? ''}</p>}
-    {recordLine && (failed || !background) && <p className="chain-record">{recordLine}</p>}
+    {background && !failed && <p className="chain-background">任务已转入后台，完成后由当前对话收取结果。{metaLine ? ` ${metaLine}` : ''}</p>}
+    {metaLine && (failed || !background) && <p className="chain-record">{metaLine}</p>}
   </section>
 }

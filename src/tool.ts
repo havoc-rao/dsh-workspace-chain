@@ -3,7 +3,8 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { SubagentRun } from '@deepseek-ai/dsh-subagent'
 import type { JobOutcome } from '@deepseek-ai/dsh-jobs'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import { startNativeRun } from './native.js'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import { continueNativeRun, planSessionId, startNativeRun } from './native.js'
 import { checkDirectory, type ResolvedConfig } from './config.js'
 import { adaptiveDeadline, probeActivity } from './patience.js'
 import {
@@ -80,13 +81,15 @@ interface RunState {
 }
 
 /** Best-effort record creation: an unwritable workspace degrades to the pre-record behaviour, not to a failed delegation. */
-function createRecord(ctx: Context, config: ResolvedConfig, input: { mode: DelegationMode; target: string; workspacePath: string; parentSessionId: string; task: string; title?: string; timeoutMs: number }): DelegationRecord | undefined {
+function createRecord(ctx: Context, config: ResolvedConfig, input: { mode: DelegationMode; target: string; workspacePath: string; parentSessionId: string; task: string; title?: string; timeoutMs: number; sessionId?: string; runId?: string }): DelegationRecord | undefined {
   if (!config.delegationRecords) return undefined
   try {
     return writeDelegationRecord({
       delegationId: newDelegationId(), createdAt: new Date().toISOString(),
       mode: input.mode, target: input.target, workspacePath: input.workspacePath,
       parentSessionId: input.parentSessionId, task: input.task, ...input.title !== undefined ? { title: input.title } : {}, timeoutMs: input.timeoutMs,
+      ...input.sessionId !== undefined ? { sessionId: input.sessionId } : {},
+      ...input.runId !== undefined ? { runId: input.runId } : {},
     })
   } catch (error) {
     logWarn(ctx, `delegation record unavailable (continuing without checkpoints): ${String(error)}`)
@@ -144,27 +147,28 @@ function enrich(error: unknown, diag: DelegationDiagnostic): DelegationFailure {
 export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
   return defineTool({
     name: config.toolName,
-    description: 'Delegate a self-contained task to a fresh agent session in a registered local workspace. Wait for its final output, or return a background job id to collect with job_output and stop with job_kill.\nParallel scheduling: launch work that is independent of your current steps in the background — e.g. you only need a contract the other side returns (a key name, an API shape) and can keep working on adjacent steps meanwhile — with run_in_background: true, continue your own work, then collect with job_output (wait: true to block) before claiming completion. Use the foreground wait only when the next step cannot proceed without this result.\nTimeouts are activity-aware, not hard caps: while the target keeps producing (a live local agent, session-store writes, or progress checkpoints) the wait extends in timeoutExtensionMs rounds up to maxTimeoutExtensions; a timeout is declared only after the target has been silent for a full extension window. An interrupted foreground call cancels the child session (the host retains it — the failure report points to the delegation record and resume instructions). Every delegation writes a task book and progress checkpoints under <workspace>/.dsh/delegations/<delegationId>/',
+    description: 'Delegate a self-contained task to a fresh agent session in a registered local workspace. Wait for its final output, or return a background job id to collect with job_output and stop with job_kill.\nReturning to a session: every local delegation returns the target sessionId up front (preallocated before the session exists — the background response and the delegation record carry it from call time), and the session stays host-retained even after a timeout or failure. Pass that same id back as session_id to deliver the next task INTO the existing session instead of creating a new one — the session keeps its full context, so a timed-out/failed delegation can simply be replied into (its record and resume note keep the id and meta).\nParallel scheduling: launch work that is independent of your current steps in the background — e.g. you only need a contract the other side returns (a key name, an API shape) and can keep working on adjacent steps meanwhile — with run_in_background: true, continue your own work, then collect with job_output (wait: true to block) before claiming completion. Use the foreground wait only when the next step cannot proceed without this result.\nTimeouts are activity-aware, not hard caps: while the target keeps producing (a live local agent, session-store writes, or progress checkpoints) the wait extends in timeoutExtensionMs rounds up to maxTimeoutExtensions; a timeout is declared only after the target has been silent for a full extension window. An interrupted foreground call cancels the child session (the host retains it — the failure report points to the delegation record and resume instructions). Every delegation writes a task book and progress checkpoints under <workspace>/.dsh/delegations/<delegationId>/',
     parameters: {
       target: { type: 'string', required: true, description: `Registered workspace absolute path, or an explicit SDK target name. Configured SDK targets: ${[...config.targets.keys()].join(', ')}.` },
       task: { type: 'string', required: true, description: 'Standalone task including context, files, goals and acceptance criteria. The target is a fresh session with no knowledge of this conversation.' },
       run_in_background: { type: 'boolean', description: 'Return a job id immediately; collect with job_output (wait: true to block up to the host wait cap) and cancel with job_kill. Default false: wait for the final output. Prefer true for tasks that can run in parallel with your remaining work; the foreground wait blocks until settlement or timeout.' },
       timeout_ms: { type: 'number', description: 'Override the configured defaultTimeoutMs for this call (positive integer ms). The target is cancelled only after the activity check: while it keeps producing, the wait extends by timeoutExtensionMs per round (maxTimeoutExtensions rounds); timeout is declared after a full silent extension window. On timeout / cancellation the delegation record explains how to resume, and the session stays open in the host.' },
       title: { type: 'string', description: 'Optional pinned title for the created session (local path only, requires host sessions.rename). Defaults to `<project>/<task summary>`, e.g. `dsh-remote/改造 cordis 配置`, so the workspace session list shows the concrete task.' },
+      session_id: { type: 'string', description: 'Return to an existing host session instead of creating a new one (local workspace targets only). Deliver the task into that same retained session — use the sessionId your previous delegation returned or that its delegation record lists (resume.md keeps it too). The session keeps its full context, composition and pinned title; no new session is created. If that session is still running, the task queues behind its current turn. A timed-out or failed delegation keeps its session and record, so this is how to reply back into it — a fresh delegation to the same workspace would create an unrelated session.' },
     },
     output: {
       schema: { oneOf: [
         { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'foreground', required: true }, output: { type: 'string', required: true }, sessionId: { type: 'string' }, runId: { type: 'string', required: true }, delegationId: { type: 'string' }, checkpointPath: { type: 'string' } } },
-        { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'background', required: true }, jobId: { type: 'string', required: true }, delegationId: { type: 'string' }, checkpointPath: { type: 'string' } } },
+        { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', const: 'background', required: true }, jobId: { type: 'string', required: true }, sessionId: { type: 'string', description: 'Preallocated host session id (local targets): the host creates the session with exactly this id when the job starts (the progress line `session created <id>` confirms); use it with session_id to return to this session later.' }, delegationId: { type: 'string' }, checkpointPath: { type: 'string' } } },
       ] },
       presentationMeta: (args, value): Record<string, string | boolean> => {
         const meta: Record<string, string | boolean> = { target: args.target }
         if (value.kind === 'foreground') {
           meta.runId = value.runId
-          if (value.sessionId) meta.sessionId = value.sessionId
         } else {
           meta.jobId = value.jobId
         }
+        if (value.sessionId) meta.sessionId = value.sessionId
         if (value.delegationId) meta.delegationId = value.delegationId
         if (value.checkpointPath) meta.checkpointPath = value.checkpointPath
         return meta
@@ -177,6 +181,9 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
       const target = config.targets.get(args.target)
       const workspace = !target ? ctx.get('workspaceRegistry')?.list().find(w => w.path === args.target) : undefined
       if (!target && !workspace) throw new Error(`Unknown workspace target ${JSON.stringify(args.target)}. Available targets: ${[...config.targets.keys()].join(', ')}`)
+      if (args.session_id !== undefined && (typeof args.session_id !== 'string' || !args.session_id.trim())) throw new TypeError('session_id must be a non-empty string')
+      const continuing = typeof args.session_id === 'string' ? args.session_id.trim() : undefined
+      if (continuing && target) throw new Error('session_id requires a local workspace target (SDK runs have no re-entrant session id)')
       if (!args.task.trim()) throw new Error('task must not be empty')
       // Recheck canonical path: reject deletion or replacement with a symlink elsewhere.
       if (target && checkDirectory(target.cwd) !== target.cwd) throw new Error(`Workspace directory changed: ${target.cwd}`)
@@ -190,11 +197,19 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
       // Pinned session title: the task's own first line (the workspace already
       // owns the session's list placement); an explicit `类别/任务` title wins.
       const title = args.title?.trim() || deriveDelegationTitle(args.task)
-      const record = createRecord(ctx, config, { mode, target: args.target, workspacePath, parentSessionId: parent.id, task: args.task, title, timeoutMs })
+      // Local path: the host session id is planned before the session exists, so
+      // the parent holds it from call time (background response + record) even
+      // while the session runs, and after a timeout/failure it can pass it back
+      // as session_id to return to the same session.
+      const planned = !target ? SessionId(continuing ?? planSessionId()) : undefined
+      const record = createRecord(ctx, config, { mode, target: args.target, workspacePath, parentSessionId: parent.id, task: args.task, title, timeoutMs, ...planned !== undefined ? { sessionId: planned } : {} })
+      if (planned !== undefined && !continuing) appendProgress(record, `[start] session planned ${planned}`)
       const request = { parent, label: `Workspace: ${args.target}`, prompt: [{ type: 'text' as const, text: composeTask(args.task, record) }] }
       const start = (signal: AbortSignal) => target
         ? ctx.subagents.start(target.providerName, { ...request, signal })
-        : startNativeRun(ctx, workspace!, parent, request.prompt[0]!.text, signal, { progress: line => appendProgress(record, `[start] ${line}`), ...config.pinnedTitles ? { title } : {} })
+        : continuing
+          ? continueNativeRun(ctx, workspace!, parent, continuing, request.prompt[0]!.text, signal, { progress: line => appendProgress(record, `[start] ${line}`) })
+          : startNativeRun(ctx, workspace!, parent, request.prompt[0]!.text, signal, { progress: line => appendProgress(record, `[start] ${line}`), ...config.pinnedTitles ? { title } : {}, ...planned !== undefined ? { sessionId: planned } : {} })
       const identity = (run: SubagentRun) => {
         updateSessionIdentity(record, { ...mode === 'local' ? { sessionId: run.id } : {}, runId: run.id })
         if (mode === 'sdk') appendProgress(record, `[start] subagent created ${run.id} (SDK run id)`)
@@ -240,7 +255,7 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
             return { done, readOutput, cancel: (reason?: string) => controller.abort(reason ?? 'workspace job killed') }
           },
         })
-        return { kind: 'background' as const, jobId, ...record ? { delegationId: record.delegationId, checkpointPath: record.progressPath } : {} }
+        return { kind: 'background' as const, jobId, ...planned !== undefined ? { sessionId: planned } : {}, ...record ? { delegationId: record.delegationId, checkpointPath: record.progressPath } : {} }
       }
       let run: SubagentRun | undefined
       const timeout = patienceFor(config, record, dshHome, exec.signal, timeoutMs, () => run)

@@ -185,6 +185,13 @@ describe('delegation tool', () => {
     await expect(f.tool.execute({ target: 'b', task: 'x', timeout_ms: -1 }, f.exec)).rejects.toThrow('timeout_ms')
     expect(f.start).not.toHaveBeenCalled()
   })
+  it('rejects session_id on an SDK target and malformed values before spawning', async () => {
+    const f = fixture()
+    await expect(f.tool.execute({ target: 'b', task: 'x', session_id: 'session-1' }, f.exec)).rejects.toThrow('session_id requires a local workspace target')
+    await expect(f.tool.execute({ target: 'b', task: 'x', session_id: 42 }, f.exec)).rejects.toThrow('"session_id" must be a string')
+    await expect(f.tool.execute({ target: 'b', task: 'x', session_id: '   ' }, f.exec)).rejects.toThrow('session_id must be a non-empty string')
+    expect(f.start).not.toHaveBeenCalled()
+  })
   it('accepts an explicit title and stores it in the task book', async () => {
     const f = fixture()
     const result = await f.tool.execute({ target: 'b', task: 'Implement API', title: '绘画/画一只猫' }, f.exec) as { delegationId: string }

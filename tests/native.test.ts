@@ -39,9 +39,16 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
       async list(r) { return { rpcId: r.rpcId, result: { ok: true, value: { items: ctx.sessions.list().map(s => ({ sessionId: s.id, updatedAt: 0, running: false, blank: false })) } } } },
       async create(r) {
         const w = r.payload.workspaceId ? ctx.workspaceRegistry.get(r.payload.workspaceId) : undefined
-        const h = await ctx.agents.create({ sessionId: SessionId(`session-${randomUUID()}`), meta: { cwd: w?.path ?? root }, agentOptions: { provider: 'native-fixture', model: 'native-model' } })
-        if (w) await w.attachSession(h.agent.id)
-        return { rpcId: r.rpcId, result: { ok: true, value: { sessionId: h.agent.id } } }
+        // Mirror the host contract: an explicit preallocated id is adopted as-is.
+        // Mirror the host contract: an explicit preallocated id is adopted as-is,
+        // and re-creating an already-live id adopts that agent instead of failing.
+        let agent = r.payload.sessionId !== undefined ? ctx.agents.get(SessionId(r.payload.sessionId)) : undefined
+        if (!agent) {
+          const h = await ctx.agents.create({ sessionId: SessionId(r.payload.sessionId ?? `session-${randomUUID()}`), meta: { cwd: w?.path ?? root }, agentOptions: { provider: 'native-fixture', model: 'native-model' } })
+          agent = h.agent
+        }
+        if (w && !w.sessionIds.includes(agent.id)) await w.attachSession(agent.id)
+        return { rpcId: r.rpcId, result: { ok: true, value: { sessionId: agent.id } } }
       },
       async rename(r) {
         renames.push({ sessionId: r.payload.sessionId, title: r.payload.title })
@@ -107,15 +114,38 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
     expect(progress).toContain('[result] completed')
     const resume = await readFile(join(recordDir, 'resume.md'), 'utf8')
     expect(resume).toContain(output.sessionId)
-    const background = await tool.execute({ target: cwd, task: 'background work', run_in_background: true }, exec) as { jobId: string; delegationId: string }
+    const background = await tool.execute({ target: cwd, task: 'background work', run_in_background: true }, exec) as { jobId: string; delegationId: string; sessionId: string }
     const backgroundRecord = join(cwd, '.dsh', 'delegations', background.delegationId)
     expect(existsSync(join(backgroundRecord, 'task.json'))).toBe(true)
+    // The local delegation id is preallocated and returned with the background response,
+    // before the job even starts: the record and the eventually created session carry it.
+    expect(background.sessionId).toMatch(/^session-/)
+    expect(JSON.parse(await readFile(join(backgroundRecord, 'task.json'), 'utf8')).sessionId).toBe(background.sessionId)
     const settled = await ctx.jobs.wait(JobId(background.jobId), 5000, parent)
     expect(settled.status).toBe('completed')
+    // The created session carries exactly the preallocated id and lives in the workspace.
+    expect(ctx.agents.get(SessionId(background.sessionId))).toBeDefined()
+    expect(workspace.sessionIds).toContain(background.sessionId)
     const collected = await ctx.tools.execute({ name: 'job_output', arguments: { job_id: background.jobId }, callId: 'collect-native' as never, agent: parent, signal: exec.signal })
     expect(collected.isError).toBe(false)
     expect(JSON.stringify(collected)).toContain('background work')
     expect(await readFile(join(backgroundRecord, 'progress.md'), 'utf8')).toContain('[result] completed')
+    // Return to the same session: session_id delivers the task into the retained session
+    // instead of creating a new one, no matter how the previous run settled.
+    const firstChild = ctx.agents.get(SessionId(output.sessionId))!
+    const beforeContinue = workspace.sessionIds.length
+    const contExec = { agent: parent, signal: AbortSignal.timeout(15000) } as unknown as ToolRunContext
+    const continued = await tool.execute({ target: cwd, task: '继续工作', session_id: output.sessionId }, contExec) as { sessionId: string; output: string; delegationId: string; checkpointPath: string }
+    expect(continued.sessionId).toBe(output.sessionId)
+    expect(workspace.sessionIds).toHaveLength(beforeContinue)
+    expect(continued.output).toContain('继续工作')
+    expect(JSON.stringify(firstChild.session.snapshotEvents())).toContain('继续工作')
+    const continueRecord = JSON.parse(await readFile(join(cwd, '.dsh', 'delegations', continued.delegationId, 'task.json'), 'utf8'))
+    expect(continueRecord).toMatchObject({ mode: 'local', workspacePath: cwd, sessionId: output.sessionId, runId: output.sessionId })
+    expect(await readFile(join(cwd, '.dsh', 'delegations', continued.delegationId, 'resume.md'), 'utf8')).toContain('session_id')
+    // A wrong id fails with a readable cause and creates nothing.
+    await expect(tool.execute({ target: cwd, task: 'x', session_id: 'session-ghost' }, contExec)).rejects.toThrow('was not found')
+    expect(workspace.sessionIds).toHaveLength(beforeContinue)
     expect(workspace.sessionIds).toHaveLength(3)
   } finally { await ctx.fiber.dispose() }
 }, 20000)
