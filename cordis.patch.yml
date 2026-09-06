@@ -1,0 +1,5 @@
+- insert:
+    - id: workspace-chain
+      name: dsh-workspace-chain
+      config:
+        targets: {}
