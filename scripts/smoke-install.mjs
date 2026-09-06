@@ -24,6 +24,6 @@ await writeFile(composition, JSON.stringify([
 ]))
 const ctx = await boot('workspace-chain-install-smoke', composition)
 try {
-  if (ctx.tools.get('delegate_workspace')) throw new Error('Empty target catalog unexpectedly registered a tool')
+  if (!ctx.tools.get('delegate_workspace')) throw new Error('Empty target catalog did not register the local delegation tool')
 } finally { await ctx.fiber.dispose() }
 console.log(`Packed plugin installed, bundle reconciled, and empty-target composition booted: ${profile}`)

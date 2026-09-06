@@ -26,3 +26,36 @@
 - 未使用真实模型 API key；真实组合中的模型是确定性适配器。
 - SDK 暴露 child session ID 后，才能可靠实现自动工作区 membership 和子会话链接。
 
+## 2026-09-06：引用层级与侧栏联动
+
+- `@` overlay slot 新组件：本项目 → workspace 本身 / session → fork，其他来源独立分组；支持当前层级搜索与分类列表。
+- workspace/session 引用区接收侧栏拖放；侧栏补丁位于相邻 `dsh-enhanced-workspace` 仓库。
+- 宿主解析稳定 workspace ID 并注入上下文；仅已配置目标可委托。Session 沿用原生引用格式。
+- 新增 UI、协议、搜索范围、层级关系和 host hint 测试。侧栏 39 项组件测试通过，开发构建完成。
+- 仍未完成真实 DSH 页面视觉验收，也未修改或重新挂载用户的 profile。
+
+后续更新：已将本地插件链接并登记到 web profile；全屏引用拖放与输入栏小型 @ 入口已实现。新增输入框引用 hover 原始信息预览，以及 workspace/session → 实际可见工具参数的宿主提示映射。委托始终创建新会话，不会恢复所引用的 session/fork。仍未完成真实页面视觉验收。
+
+工具呈现更新：移除 workspace-chain system section；后端工具保留注册，但从顶层 schema 和生成的 SDK system section 中排除。调用说明仅在命中 query/引用后的消息中追加，模型直接发出 delegate_workspace 原生 tool-call。已移除对 run_code 的调用依赖，不修改宿主工具模式。组合测试覆盖 native/both 的挂载前后前缀相等，以及后续 hint → 原生委派调用 → 实际 SDK 子会话 → 结果整合；模型是确定性 fixture，实际供应商对未列入顶层 tools 的调用能力仍待验证。当前 web profile 的 targets 仍为空，必须配置目标后才有实际委派能力。
+
+针对 session 2 日志：原始输入“@workspace-id/... 给他发送一个你好”只获得项目元信息，未获得调用说明，原因是当前 targets 为空。现已补充任务交接场景、可执行/未配置/不可调用的明确状态，以及唯一目标可用时的具体调用参数；native 模式的真实 SDK 组合测试已覆盖该原始输入，模型仍使用确定性 fixture。39 项测试通过。
+
+
+## 2026-09-06：默认切换为宿主本地会话 API
+
+上述“空 targets 不可委派”和 SDK 会话归属限制不再适用于默认路径。插件现在始终注册工具，已登记工作区按精确路径解析，通过宿主 sessions.create / prompt / cancel 创建、交付和取消任务；create 负责 workspace membership 与 preset。会话结束后保留，使用宿主新会话默认模型，继承父当前 preset。显式 SDK targets 继续走原有独立进程路径。
+
+后续消息的调用声明及顶层 system/tools 前缀隔离保留。增加 API 契约边界 + 真实 loop 的全链路测试，以及 preset 参数、创建/发送失败、取消与发送竞态测试。缓存 apiproxy 的传递依赖存在版本冲突，API 实现本身没有在测试中加载；真实宿主和真实供应商仍待联调。未重新挂载 profile。
+
+## 2026-09-06：委派体验修复（对照 dsh-enhanced-workspace/docs/delegation-experience-analysis.md）
+
+针对父会话三次 `workspace delegation ended: aborted` 现场（无分类、无日志路径、无过程输出、任务书丢失、无法干预）落地：
+
+- **委派记录 + checkpoint 协议**：每次委派写 `<workspace>/.dsh/delegations/<delegationId>/{task.md, task.json, progress.md, resume.md}`；任务书信封向目标会话声明进度协议（每完成一个可验证步骤 append 一行）；`delegationRecords: false` 关闭恢复旧行为；目录不可写 best-effort 降级。
+- **结构化失败诊断**：分类 `completed | timeout | cancelled | crash | host-reclaim | refused | max-tokens | failed`（对齐父侧契约，failed 为 unknown 槽）；前台错误与后台 job detail 均含 Classification/（SDK run id 或本地 session id）/transcript 位置（宿主或 child session store）/Checkpoint/Task/Resume 路径/elapsed；`DelegationFailure.diagnostic` 供程序化消费。
+- **过程可见性**：后台 job 提供 readOutput——运行中 job_output 返回 progress 摘要，结算后返回最终输出；native 路径在 session 创建/任务交付/取消请求处打生命周期 checkpoint。
+- **等待语义**：区分顶层 `tool-jobs` 的两种返回（wait 上限到点 → `[status: running]`+摘要；`Error: wait aborted` → 父侧信号被宿主中止，任务仍在跑）；前台/后台超时统一由 `timeout_ms`（默认 defaultTimeoutMs）约束并在诊断中标注 elapsed；新参数仅扩展兼容。
+- **可恢复性**：task/resume 持久化即恢复入口；resume.md 含续跑指引与样例任务书；宿主保留会话的找回路径写入诊断。
+- **会话标题固定**：确认 `sessions.create` 无 title 字段、宿主提供 `sessions.rename`（追加 `session/title` 事件并 pin 住自动再生成）；创建后立即 rename 为 `项目/任务摘要`（`deriveDelegationTitle`：工作区显示名 + 任务首行去格式后截断 40 字符；显式 `title` 参数优先；`pinnedTitles: false` 关闭）。rename 为 best-effort（老宿主无该 RPC / 标题被拒只记 progress 行）；SDK 子进程无宿主会话，标题只写入任务书。任务书同步记录 `title`（task.md 表行 + task.json 字段）。
+- 测试：新增 delegation-record 专项（含 deriveDelegationTitle 格式/截断/去格式用例）与 tool 层分类/等待/readOutput/降级/title 用例；native 生命周期新增 rename 固定/失败容忍/缺省跳过；native 集成测试断言 `Target/not-a-command` 风格标题经真实 rename RPC 固定且入任务书。67 项全绿，typecheck/build 通过。
+- 未完成：P6 宿主侧核查（会话回收策略、父侧信号中止条件、tool-jobs wait 配置）与真实页面视觉验收；记录在 README"宿主侧待核查"。

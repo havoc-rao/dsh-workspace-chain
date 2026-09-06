@@ -47,12 +47,21 @@ it.each([true, false])('real SDK child runtime: shared store=%s, cwd, scrub, per
   const ctx = await boot('chain-test-parent', parentConfig)
   try {
     const target = { cwd, command: process.execPath, args: [resolve('lib/child-bin.js'), childConfig], provider: 'mock', model: 'mock', env: { CHAIN_EXPLICIT: 'allowed' } }
-    await ctx.plugin(chain, { shareSessionStore: shared, defaultTimeoutMs: 20000, targets: { b: target, second: target } })
     const handle = await ctx.agents.create({ sessionId: SessionId(randomUUID()), meta: { cwd: root }, agentOptions: { provider: 'mock', model: 'mock' } })
+    handle.agent.ctx.tools.presentAs(shared ? 'native' : 'both')
+    const prefixBefore = await ctx.systemPrompt.assemble({ scope: handle.agent })
+    const nativeBefore = await ctx.systemPrompt.assemble({})
+    await ctx.plugin(chain, { shareSessionStore: shared, defaultTimeoutMs: 20000, targets: shared ? { b: target } : { b: target, second: target } })
+    const prefixAfter = await ctx.systemPrompt.assemble({ scope: handle.agent })
+    const nativeAfter = await ctx.systemPrompt.assemble({})
+    expect(prefixAfter.sections).toEqual(prefixBefore.sections)
+    expect(prefixAfter.tools).toEqual(prefixBefore.tools)
+    expect(nativeAfter.sections).toEqual(nativeBefore.sections)
+    expect(nativeAfter.tools).toEqual(nativeBefore.tools)
     try {
       const tool = ctx.tools.get('delegate_workspace')!
       const exec = { agent: handle.agent, signal: AbortSignal.timeout(25000) } as unknown as ToolRunContext
-      const results = await Promise.all([1, 2].map(i => tool.execute({ target: i === 1 ? 'b' : 'second', task: `Report process state ${i}` }, exec))) as { kind: string; output: string; runId: string }[]
+      const results = await Promise.all([1, 2].map(i => tool.execute({ target: shared || i === 1 ? 'b' : 'second', task: `Report process state ${i}` }, exec))) as { kind: string; output: string; runId: string }[]
       for (const result of results) {
         expect(result.kind).toBe('foreground')
         expect(JSON.parse(result.output)).toEqual({ cwd, home: shared ? home : join(cwd, '.dsh-workspace-chain'), ambientSecret: null, explicit: 'allowed' })
@@ -64,7 +73,8 @@ it.each([true, false])('real SDK child runtime: shared store=%s, cwd, scrub, per
       expect(output.isError).toBe(false)
       expect(JSON.stringify(output)).toContain(cwd)
       // A real parent turn: query -> durable hint -> model tool call -> child -> A's integrated answer.
-      handle.agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '请 @workspace/b 报告工作区，然后汇总结果。' }] }))
+      const referencedWorkspace = shared ? await ctx.workspaceRegistry.create(cwd, 'space-labeler') : undefined
+      handle.agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: referencedWorkspace ? `@workspace-id/${referencedWorkspace.id} 给他发送一个你好。` : '请 @workspace/b 报告工作区，然后汇总结果。' }] }))
       await handle.agent.whenIdle()
       const events = handle.agent.session.snapshotEvents()
       expect(events.some(e => e.type === 'user/message' && e.data.source.kind === 'plugin' && e.data.source.plugin === 'workspace-chain')).toBe(true)
@@ -83,7 +93,8 @@ it.each([true, false])('real SDK child runtime: shared store=%s, cwd, scrub, per
       }
       const workspace = ctx.workspaceRegistry.list().find(w => w.path === cwd)
       // SDK run ids are not child session ids. Do not publish false UI links or membership.
-      expect(workspace).toBeUndefined()
+      if (shared) expect(workspace?.sessionIds).toEqual([])
+      else expect(workspace).toBeUndefined()
       const parentHeaders = await ctx.sessionPersistence.list()
       expect(parentHeaders.filter(header => header.cwd === cwd)).toHaveLength(shared ? 4 : 0)
       for (const result of results) expect(parentHeaders.some(header => header.id === result.runId)).toBe(false)

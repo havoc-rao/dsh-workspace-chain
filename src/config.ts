@@ -19,6 +19,10 @@ export interface Config {
   promptEnabled?: boolean
   defaultTimeoutMs?: number
   shareSessionStore?: boolean
+  /** Write the delegation task book + progress checkpoints to <target>/.dsh/delegations/<id>/. Default true. */
+  delegationRecords?: boolean
+  /** Pin the created session's title (`项目/任务摘要`) via sessions.rename; local path only. Default true. */
+  pinnedTitles?: boolean
   targets?: Record<string, Target>
 }
 export const Config: z<Config> = z.object({
@@ -26,6 +30,8 @@ export const Config: z<Config> = z.object({
   promptEnabled: z.boolean().default(true),
   defaultTimeoutMs: z.number().default(300_000),
   shareSessionStore: z.boolean().default(true),
+  delegationRecords: z.boolean().default(true),
+  pinnedTitles: z.boolean().default(true),
   targets: z.dict(z.object({
     purpose: z.string(), aliases: z.array(z.string()).default([]), cwd: z.string().required(), command: z.string().required(),
     args: z.array(z.string()).default([]), env: z.dict(z.string()).default({}),
@@ -46,6 +52,8 @@ export interface ResolvedConfig {
   toolName: string
   promptEnabled: boolean
   defaultTimeoutMs: number
+  delegationRecords: boolean
+  pinnedTitles: boolean
   targets: Map<string, ResolvedTarget>
 }
 export function checkDirectory(path: string): string {
@@ -63,7 +71,7 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
   if (!Number.isSafeInteger(defaultTimeoutMs) || defaultTimeoutMs <= 0 || defaultTimeoutMs > 2_147_483_647) {
     throw new TypeError('defaultTimeoutMs must be a positive integer <= 2147483647')
   }
-  for (const key of ['promptEnabled', 'shareSessionStore'] as const) {
+  for (const key of ['promptEnabled', 'shareSessionStore', 'delegationRecords', 'pinnedTitles'] as const) {
     if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new TypeError(`${key} must be boolean`)
   }
   if (input.targets !== undefined && (!input.targets || typeof input.targets !== 'object' || Array.isArray(input.targets))) throw new TypeError('targets must be a dictionary')
@@ -100,5 +108,5 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
     targets.set(name, { ...target, cwd, args: [...target.args ?? []], env, provider, model,
       providerName: `workspace-chain:${toolName}:${name}` })
   }
-  return { shareSessionStore: input.shareSessionStore ?? true, toolName, promptEnabled: input.promptEnabled ?? true, defaultTimeoutMs, targets }
+  return { shareSessionStore: input.shareSessionStore ?? true, toolName, promptEnabled: input.promptEnabled ?? true, defaultTimeoutMs, delegationRecords: input.delegationRecords ?? true, pinnedTitles: input.pinnedTitles ?? true, targets }
 }
