@@ -9,17 +9,21 @@ import { join } from 'node:path'
  * Layout per delegation (created under the TARGET workspace, so any session
  * in that workspace — including a fresh resume session — can read it):
  *
- *   <workspace>/.dsh/delegations/<delegationId>/
- *     task.json    task book (task text, target, parent, timestamps, session id)
- *     progress.md  checkpoint log; the child appends one line per verifiable step
- *     resume.md    recovery instructions + a ready-made resume task book sample
+ *   <workspace>/.dsh/
+ *     .gitignore   generated once: `*` + `!.gitignore`, so delegation records
+ *                  never show up in the target's git status
+ *     delegations/<delegationId>/
+ *       task.md       task book (task text, target, parent, timestamps, session id)
+ *       progress.md   checkpoint log; the child appends one line per verifiable step
+ *       resume.md     recovery instructions + a ready-made resume task book sample
  *
  * All writes are best-effort from the caller's perspective: a workspace the
  * plugin cannot write to degrades to the previous behaviour (delegation still
  * runs, just without the checkpoint protocol).
  */
 
-export const DELEGATION_ROOT = join('.dsh', 'delegations')
+export const DOT_DSH_DIR = '.dsh'
+export const DELEGATION_ROOT = join(DOT_DSH_DIR, 'delegations')
 export const TASK_FILE = 'task.md'
 export const TASK_JSON_FILE = 'task.json'
 export const PROGRESS_FILE = 'progress.md'
@@ -82,11 +86,37 @@ function timestamp(): string {
   return new Date().toISOString().slice(11, 19)
 }
 
+/** Generated <workspace>/.dsh/.gitignore: ignore every generated sub-file, keep the ignore file itself tracked so the rule persists in the repo. */
+const DOT_DSH_GITIGNORE = [
+  '# dsh-workspace-chain delegation records (task books, checkpoints, resume notes) are generated per delegation.',
+  '# Everything under .dsh/ is generated output — keep it out of git status. Only this file itself stays tracked.',
+  '*',
+  '!.gitignore',
+  '',
+].join('\n')
+
+/**
+ * Git hygiene for the generated record root, best-effort and idempotent:
+ * make sure <workspace>/.dsh/.gitignore exists once records are generated
+ * under that directory, so task books and checkpoints never pollute the
+ * target's git status. An existing user-managed .gitignore is left untouched;
+ * any failure is swallowed (the delegation record must not depend on it).
+ */
+export function ensureDotDshGitIgnore(workspacePath: string): void {
+  try {
+    const dotDsh = join(workspacePath, DOT_DSH_DIR)
+    mkdirSync(dotDsh, { recursive: true })
+    const gitignorePath = join(dotDsh, '.gitignore')
+    try { readFileSync(gitignorePath, 'utf8') } catch { writeFileSync(gitignorePath, DOT_DSH_GITIGNORE) }
+  } catch { /* best-effort */ }
+}
+
 /** Write the task book, progress header and initial resume note. Throws on fs failure; callers decide how to degrade. */
 export function writeDelegationRecord(input: WriteDelegationRecordInput): DelegationRecord {
   const dir = recordDir(input.workspacePath, input.delegationId)
   const files = recordFiles(dir)
   mkdirSync(dir, { recursive: true })
+  ensureDotDshGitIgnore(input.workspacePath)
   const record: DelegationRecord = { ...input, dir, ...files }
   writeTaskJson(record)
   writeTaskMarkdown(record)

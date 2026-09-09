@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -116,6 +116,35 @@ describe('delegation record', () => {
       delegationId: newDelegationId(), mode: 'local', target: workspacePath, workspacePath,
       parentSessionId: 'parent', createdAt: new Date().toISOString(), task: 'x',
     })).toThrow()
+  })
+  it('puts a .gitignore under .dsh that ignores every generated sub-file but itself', () => {
+    const { workspacePath } = recordFixture()
+    const gitignorePath = join(workspacePath, '.dsh', '.gitignore')
+    expect(existsSync(gitignorePath)).toBe(true)
+    const content = readFileSync(gitignorePath, 'utf8')
+    expect(content).toContain('*')
+    expect(content).toContain('!.gitignore')
+  })
+  it('leaves an existing user-managed .dsh/.gitignore untouched', () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'chain-record-')); roots.push(workspacePath)
+    mkdirSync(join(workspacePath, '.dsh'), { recursive: true })
+    const userRules = '# user rules\nnode_modules/\n'
+    writeFileSync(join(workspacePath, '.dsh', '.gitignore'), userRules)
+    writeDelegationRecord({
+      delegationId: newDelegationId(), mode: 'local', target: workspacePath, workspacePath,
+      parentSessionId: 'parent', createdAt: new Date().toISOString(), task: 'x',
+    })
+    expect(readFileSync(join(workspacePath, '.dsh', '.gitignore'), 'utf8')).toBe(userRules)
+  })
+  it('keeps the delegation record when the .dsh gitignore itself is not writable', () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'chain-record-')); roots.push(workspacePath)
+    mkdirSync(join(workspacePath, '.dsh', '.gitignore'), { recursive: true })
+    const record = writeDelegationRecord({
+      delegationId: newDelegationId(), mode: 'local', target: workspacePath, workspacePath,
+      parentSessionId: 'parent', createdAt: new Date().toISOString(), task: 'x',
+    })
+    expect(existsSync(record.taskPath)).toBe(true)
+    expect(existsSync(record.progressPath)).toBe(true)
   })
   it('classifies settlement reasons with the right precedence', () => {
     expect(classifyDelegation({ stopReason: 'aborted', timeout: true, canceled: false })).toBe('timeout')
