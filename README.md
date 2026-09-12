@@ -7,10 +7,10 @@
 1. 输入 `@`，从 workspace-chain 候选中选择目标；输入框显示工作区引用标签，工作区引用保存 ID 与名称快照；显式 SDK target 仍使用 `@workspace/project-b`。
 2. 服务端识别当前 query 中的目标引用、名称和 `aliases`；明确的“继续／刚才那个项目”追问可关联最近六条用户消息。只分析用户消息，不把工具输出当成用户选择。
 3. 注入可落日志的 hint，提醒模型结合当前请求、已有对话、目标职责与上游结果作判断。**提及一个项目不等于要求执行**；是否委托仍由 agent 判断。
-4. 模型调用 `delegate_workspace`。默认通过宿主 `ctx.apiProxy.sessions.create({ workspaceId, agentPreset })` 创建真实会话（**会话 ID 在调用时预分配，后台响应与委派记录即时携带**），再由 `sessions.prompt` 交付自包含任务；传 `session_id` 时改为直接回复上次发布的同一会话。新会话使用宿主默认模型和父会话当前 preset，自动归入目标工作区；只显式配置的 SDK target 使用独立进程。
+4. 模型调用 `delegate_workspace`。默认通过宿主 `ctx.sessionController.create({ workspaceId, agentPreset })`（`dsh-api-session-controller` 的 Session Remote，取代已退役的 `apiProxy` 网关）创建真实会话（**会话 ID 在调用时预分配，后台响应与委派记录即时携带**），再由 `sessionController.prompt` 交付自包含任务；传 `session_id` 时改为直接回复上次发布的同一会话。新会话使用宿主默认模型和父会话当前 preset，自动归入目标工作区；只显式配置的 SDK target 使用独立进程。
 5. 前台结果直接回给 A；后台返回 job ID，由 `job_output` 收取、`job_kill` 取消。A 核对完成状态、整合结果，再回答原始请求。UI 显示目标、运行／失败／结果已返回状态和可展开的任务、结果。
 
-空 targets 也注册后端执行能力，但不加入顶层 tools 或 system prompt。命中 query 时，在后续消息中提供 `delegate_workspace` 的工具名、参数和原生 tool-call 调用说明，不依赖 run_code。支持原生调用的 native/standard 与 both 模式；宿主强制 code-only 的模式仍由宿主管理，插件不改其执行策略。后续上下文中的声明不等于所有模型供应商都支持未列入顶层 tools 的调用，需以实际模型验收为准。
+空 targets 也注册后端执行能力。默认 `visibleTools: true` 把 `delegate_workspace` 作为普通工具放进会话顶层 schema 与 `tools:sdk` 段，任何模型都可直接调用；命中 query 时仍注入提示说明用法与并行/超时/回话语义。设 `visibleTools: false` 可退回"仅声明不进 schema"的 deferred 模式（工具注册在后端、用注入的文本声明引导模型发出原生 tool-call，由宿主按名路由——部分模型 loop 不接受 schema 之外的调用，故默认不再使用该模式）。支持原生调用的 native/standard 与 both 模式；宿主强制 code-only 的模式仍由宿主管理，插件不改其执行策略。
 
 ## 安装与构建
 
@@ -26,7 +26,7 @@ pnpm pack
 dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-0.1.0.tgz
 ```
 
-尚未发布到 npm。默认 bundle patch 的 `targets: {}` 即可使用：宿主提供 `apiProxy` 与 `workspaceRegistry` 时，所有已登记的本地工作区都可通过引用委派。无需配置 command、环境变量或子进程模型密钥。
+尚未发布到 npm。默认 bundle patch 的 `targets: {}` 即可使用：宿主提供 `sessionController` 与 `workspaceRegistry` 服务（web profile 的 `session-controller` 行）时，所有已登记的本地工作区都可通过引用委派。无需配置 command、环境变量或子进程模型密钥。
 
 ### 版本兼容
 

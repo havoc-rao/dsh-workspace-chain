@@ -10,7 +10,7 @@ export function mountCatalog(ctx: Context, config: ResolvedConfig): void {
     const connection = scope.get('connection') as HostConnectionHandle
     const catalog: Catalog = { toolName: config.toolName, targets: [...config.targets].map(([name, t]) => ({ name, purpose: t.purpose ?? '', aliases: t.aliases ?? [] })) }
     connection.rpc.handle(CHANNEL, async endpoint => endpoint === 'catalog'
-      ? { ok: true as const, value: { ...catalog, workspaces: (scope.get('workspaceRegistry')?.list() ?? []).map(w => ({ id: w.id, targets: workspaceTargets(w, config, scope.get('apiProxy') !== undefined) })) } }
+      ? { ok: true as const, value: { ...catalog, workspaces: (scope.get('workspaceRegistry')?.list() ?? []).map(w => ({ id: w.id, targets: workspaceTargets(w, config, scope.get('sessionController') !== undefined) })) } }
       : { ok: false as const, error: { code: 'internal', message: `Unknown workspace-chain endpoint: ${endpoint}`, details: {} } }, { authority: 'loopback' })
   })
 }

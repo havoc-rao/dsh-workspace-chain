@@ -51,7 +51,7 @@ it.each([true, false])('real SDK child runtime: shared store=%s, cwd, scrub, per
     handle.agent.ctx.tools.presentAs(shared ? 'native' : 'both')
     const prefixBefore = await ctx.systemPrompt.assemble({ scope: handle.agent })
     const nativeBefore = await ctx.systemPrompt.assemble({})
-    await ctx.plugin(chain, { shareSessionStore: shared, defaultTimeoutMs: 20000, targets: shared ? { b: target } : { b: target, second: target } })
+    await ctx.plugin(chain, { shareSessionStore: shared, defaultTimeoutMs: 20000, visibleTools: false, targets: shared ? { b: target } : { b: target, second: target } })
     const prefixAfter = await ctx.systemPrompt.assemble({ scope: handle.agent })
     const nativeAfter = await ctx.systemPrompt.assemble({})
     expect(prefixAfter.sections).toEqual(prefixBefore.sections)
@@ -111,3 +111,35 @@ it('boots the packaged default child composition over JSON-RPC without model cal
   })
   try { await harness.start() } finally { await harness.close() }
 }, 20000)
+
+it('visible mode (default) keeps the delegation tool in the top-level schema; the hint no longer needs an out-of-schema call', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'chain-visible-'))); roots.push(root)
+  const cwd = join(root, 'target'); await mkdir(cwd)
+  await writeFile(join(root, 'host.json'), JSON.stringify([
+    { name: resolve('lib/child-runtime.js') },
+    { name: fileURLToPath(import.meta.resolve('@deepseek-ai/dsh-session-persistence-jsonl')), config: { root: join(root, 'sessions'), compression: 'none' } },
+    ...['dsh-storage', 'dsh-storage-json', 'dsh-storage-domain', 'dsh-workspace', 'dsh-subagent', 'dsh-tool-jobs'].map(name => ({
+      name: fileURLToPath(import.meta.resolve(`@deepseek-ai/${name}`)),
+      config: name === 'dsh-storage-json' ? { root: join(root, 'storage') } : name === 'dsh-storage-domain' ? { backend: 'json' } : {},
+    })),
+    { name: resolve('tests/fixtures/native-llm.mjs') },
+  ]))
+  const ctx = await boot('chain-visible-test', join(root, 'host.json'))
+  try {
+    const handle = await ctx.agents.create({ sessionId: SessionId(randomUUID()), meta: { cwd }, agentOptions: { provider: 'native-fixture', model: 'native-model' } })
+    const agent = handle.agent
+    try {
+      agent.ctx.tools.presentAs('native')
+      const before = await ctx.systemPrompt.assemble({ scope: agent })
+      await ctx.plugin(chain, {})
+      const after = await ctx.systemPrompt.assemble({ scope: agent })
+      // Default visibleTools: true — the tool is a normal top-level tool now;
+      // native mode is the deployment default and the mode this plugin's
+      // deferred declaration was designed around.
+      expect(before.tools.some(tool => tool.name === 'delegate_workspace')).toBe(false)
+      expect(after.tools.some(tool => tool.name === 'delegate_workspace')).toBe(true)
+      // Hidden mode (visibleTools: false) still strips it from the schema; the
+      // SDK-section coverage of that path lives in the real-runtime tests above.
+    } finally { await handle.dispose() }
+  } finally { await ctx.fiber.dispose() }
+}, 30000)

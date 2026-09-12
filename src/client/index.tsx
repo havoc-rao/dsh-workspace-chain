@@ -1,4 +1,7 @@
-import type { ClientContext, ISessions, IWorkspaces } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { InputTriggerServiceContract } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
@@ -32,7 +35,7 @@ export function apply(ctx: ClientContext): void {
     const projects = workspaces?.list.getSnapshot().items ?? []
     return [
       ...projects.map(item => ({ kind: 'workspace' as const, id: item.workspaceId, label: item.title, description: item.path })),
-      ...(state?.ids ?? []).flatMap(id => {
+      ...(state?.ids ?? []).flatMap((id: SessionId) => {
         const item = state!.byId[id]
         return item && !item.blank ? [{ kind: 'session' as const, id, label: item.displayTitle, description: item.cwd ?? '', updatedAt: item.updatedAt, parentId: item.parentId, origin: item.origin, workspaceId: projects.find(project => project.sessionIds.includes(id) || project.path === item.cwd)?.workspaceId }] : []
       }),
@@ -54,19 +57,22 @@ export function apply(ctx: ClientContext): void {
     },
   }, ReferenceMenu))
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'workspace-chain-references', order: 30 },
-    (props: PropsRuntime<'conversation.input.left'>) => <><ReferencePreview occurrences={props.input.occurrences} items={references} load={load} /><ReferenceDock items={references} disabled={props.input.phase !== 'plain'} open={() => {
-      const sessions = ctx.get('sessions') as unknown as ISessions
-      const scope = sessions.scope(props.sessionId)
-      if (!scope) return
-      const end = props.input.draft.length
-      scope.bail(scope, 'slash/input-insert-text', { text: `${end && !/\s$/.test(props.input.draft) ? ' ' : ''}@`, span: { start: end, end, draftRev: props.input.draftRev }, continue: true })
-    }} insert={item => {
-      const sessions = ctx.get('sessions') as unknown as ISessions
-      const scope = sessions.scope(props.sessionId)
-      if (!scope) return false
-      const end = props.input.draft.length
-      return scope.bail(scope, 'slash/input-insert-reference', { reference: referenceInsert(item), span: { start: end, end, draftRev: props.input.draftRev } }) === true
-    }} /></>))
+    (props: PropsRuntime<'conversation.input.left'>) => {
+      const input = props.useInput(state => state)
+      return <><ReferencePreview occurrences={input.occurrences} items={references} load={load} /><ReferenceDock items={references} disabled={input.phase !== 'plain'} open={() => {
+        const sessions = ctx.get('sessions') as unknown as ISessions
+        const scope = sessions.scope(props.sessionId)
+        if (!scope) return
+        const end = input.draft.length
+        scope.bail(scope, 'slash/input-insert-text', { text: `${end && !/\s$/.test(input.draft) ? ' ' : ''}@`, span: { start: end, end, draftRev: input.draftRev }, continue: true })
+      }} insert={item => {
+        const sessions = ctx.get('sessions') as unknown as ISessions
+        const scope = sessions.scope(props.sessionId)
+        if (!scope) return false
+        const end = input.draft.length
+        return scope.bail(scope, 'slash/input-insert-reference', { reference: referenceInsert(item), span: { start: end, end, draftRev: input.draftRev } }) === true
+      }} /></>
+    }))
   // Wait for the owning tool slot; catalog is refreshed on each activation and menu request.
   ctx.slots.inject('tool.call.toolview', () => {
     let disposed = false

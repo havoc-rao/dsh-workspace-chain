@@ -69,3 +69,22 @@
 - **任务书活跃心跳**：`composeTask` 信封增加长耗时步骤（构建/测试/等待外部结果）开始时追加 `- <步骤>…` 的协议，并告知目标侧超时语义，让"对方还在正常工作"可被观测。
 - 测试：新增 patience 单测（顺延/静默/上限/取消竞态/探测判定）与 tool 层用例（live agent 顺延后完成、session-store 心跳顺延后静默超时、扩展上限、hint 文案）、config 新字段校验；tool fixture 改为隔离 DSH_HOME 避免探测读到真实 home。typecheck/build 通过，83 项测试全绿。
 - 未完成：真实长任务现场验收（前台/后台各一次观察 `[extend]` 顺延与静默超时）；README"宿主侧待核查"开放项不变。
+
+## 2026-09-12：迁移到宿主 sessionController（原 apiProxy 网关已从本体移除）
+
+背景：引用工作区（如 @DSH-code-finder）触发“DSH 本地会话 API 不可用”提示——不是宿主故障，而是插件消费的旧宿主角落在 0.1.5-rc.2 中不存在。
+
+- **根因**：deepseek-harness commit `4f00a8b82a`（2026-08-27 `refactor(api): remove ApiProxy package`）整体删除 `packages/host/apiproxy`（含 `ctx.apiProxy` 服务与 Web bundle 的 api-gateway 行，-3529 行）；替代品是 `packages/api/*`（Typert Remote）：`dsh-api-session-controller`（namespace `session`）等。web profile 已挂 `session-controller` 行，宿主侧可直接调用 `ctx.sessionController`。
+- **迁移**：`src/native.ts` 从 `ctx.get('apiProxy').sessions.*`（rpc 信封）改为 `ctx.sessionController.{list,create,rename,prompt,cancel}`（普通请求对象；`list/prompt` 附 signal；prompt 新增必填 `requestId`）。会话 ID 预分配 adoption 由新 create 原生支持，删除“宿主拒绝预分配则回退”分支与 `createSession` 封装。父 preset 改为直接读 `parent.session.header.agentPreset`（新 list 摘要不再暴露 agentPreset）。
+- **可用性门**：`workspace-hints.ts`/`catalog.ts` 的 `nativeAvailable` 改为 `ctx.get('sessionController') !== undefined`；peer 依赖 `dsh-host-apiproxy` 换成 `dsh-api-session-controller >=0.1.5-rc.2`（optional，类型仅 devDeps 引用）。
+- **测试**：native 单测/集成 mock 从 `{rpcId, result}` 信封改为 plain 契约；删除“预分配回退”用例；断言适配 prompt 双参签名。typecheck/build 通过，96 项测试全绿。
+- **未完成**：宿主进程重启后真实验收（重启 web profile 使新 lib 生效，再对已登记工作区跑一次引用委派）；`docs/dsh-host-session-api-requirements.md` 为本体侧稳定契约的需求清单。
+
+## 2026-09-12：delegate_workspace 默认进入顶层工具 schema（visibleTools）
+
+背景：宿主迁移到 `sessionController` 后，本会话（Claude 系模型）仍无法调用委派工具——deferred 模式的文本声明进不了顶层 schema，模型端 tool-call 校验拒绝 schema 之外的函数名；DeepSeek 原生 loop 按名路由可用，但不能作为通用假设。
+
+- **`visibleTools` 配置（默认 true）**：`delegate_workspace` 保留在 `system-prompt/assemble` 产出的 `assembly.tools` 与 `tools:sdk` 段，任何模型都把它当普通工具直接调用；`visibleTools: false` 恢复 deferred 模式（剥离 schema，仅注入文本声明 + 宿主按名路由）。
+- **提示文案分支**：`invocationHint` 按模式说明"已注册在顶层 tools"或"未列在顶层 tools，通过原生 tool-call 调用"；其余用法/并行/超时/回话语义不变。
+- **测试**：config 新增默认值/关闭/类型校验用例；组合测试新增可见模式断言（mount 后 `assembly.tools` 含 `delegate_workspace`，native 呈现模式）；native/组合原有前缀相等断言显式传 `visibleTools: false` 保持其"隐藏模式"语义。typecheck/build 通过，97 项测试全绿。
+- **未完成**：重启 electron 后真实会话验收（本会话工具表应直接出现 `delegate_workspace`，引用委派可被实际调用）。

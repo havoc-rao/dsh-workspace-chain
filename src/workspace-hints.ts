@@ -72,7 +72,7 @@ export function mountWorkspaceHints(ctx: Context, config: ResolvedConfig): void 
     const registry = ctx.get('workspaceRegistry')
     const workspaces = registry?.list() ?? []
     const available = delegationAvailable(ctx, agent, config)
-    const nativeAvailable = ctx.get('apiProxy') !== undefined
+    const nativeAvailable = ctx.get('sessionController') !== undefined
     let text = workspaceHint(query, workspaces, config, available, nativeAvailable)
     const handoff = workspaceHandoff(query, workspaces, config, available, nativeAvailable)
     if (text) text += `\n${handoff.text}`

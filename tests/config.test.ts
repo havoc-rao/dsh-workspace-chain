@@ -12,6 +12,10 @@ describe('configuration', () => {
     expect(resolveConfig().defaultTimeoutMs).toBe(300000)
     expect(resolveConfig().timeoutExtensionMs).toBe(120000)
     expect(resolveConfig().maxTimeoutExtensions).toBe(10)
+    // The delegation tool is visible in the top-level schema by default; opt out to the deferred declaration.
+    expect(resolveConfig().visibleTools).toBe(true)
+    expect(resolveConfig({ visibleTools: false }).visibleTools).toBe(false)
+    expect(() => resolveConfig({ visibleTools: 'yes' as never })).toThrow('visibleTools')
   })
   it('canonicalizes cwd and explicitly forwards shared home without ambient secrets', () => {
     const root = directory(); mkdirSync(join(root, 'project')); symlinkSync(join(root, 'project'), join(root, 'alias'))

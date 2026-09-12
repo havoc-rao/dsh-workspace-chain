@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it } from 'vitest'
 import { boot } from '@deepseek-ai/dsh-app-boot'
-import type { ApiProxy, RpcId as RpcIdType } from '@deepseek-ai/dsh-host-apiproxy'
+import type { SessionController, SessionRequestId } from '@deepseek-ai/dsh-api-session-controller'
 import { randomUUID } from 'node:crypto'
 import { JobId } from '@deepseek-ai/dsh-jobs'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -13,7 +13,6 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { workspaceReference, referenceInsert } from '../src/shared/references.js'
 import * as chain from '../src/index.js'
-const RpcId = (value: string) => value as RpcIdType
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(p => rm(p, { recursive: true, force: true }))) })
 it('uses the local API contract and a real agent loop for an unconfigured workspace and retains a continuable session', async () => {
@@ -32,48 +31,47 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
   const ctx = await boot('native-chain-test', file)
   try {
     // Contract fixture at the host boundary; the registry, loop and tools below are real.
-    // The cached apiproxy package has incompatible transitive api-remotes exports,
-    // so importing its implementation is not a valid integration environment here.
+    // The plugin consumes ctx.sessionController (the host Session Remote service
+    // that replaced the retired apiProxy gateway), so the fixture mirrors that
+    // plain-request contract instead of the deleted rpc-envelope carrier.
     const renames: { sessionId: string; title: string }[] = []
-    const sessions: Pick<ApiProxy['sessions'], 'list' | 'create' | 'rename' | 'prompt' | 'cancel'> = {
-      async list(r) { return { rpcId: r.rpcId, result: { ok: true, value: { items: ctx.sessions.list().map(s => ({ sessionId: s.id, updatedAt: 0, running: false, blank: false })) } } } },
-      async create(r) {
-        const w = r.payload.workspaceId ? ctx.workspaceRegistry.get(r.payload.workspaceId) : undefined
-        // Mirror the host contract: an explicit preallocated id is adopted as-is.
+    const controller = {
+      async list(_request: unknown, _signal: AbortSignal) { return { items: ctx.sessions.list().map(s => ({ sessionId: s.id, updatedAt: 0, running: false, blank: false })) } },
+      async create(request: { workspaceId?: import('@deepseek-ai/dsh-workspace').WorkspaceId; agentPreset?: string; sessionId?: string }) {
+        const w = request.workspaceId ? ctx.workspaceRegistry.get(request.workspaceId) : undefined
         // Mirror the host contract: an explicit preallocated id is adopted as-is,
         // and re-creating an already-live id adopts that agent instead of failing.
-        let agent = r.payload.sessionId !== undefined ? ctx.agents.get(SessionId(r.payload.sessionId)) : undefined
+        let agent = request.sessionId !== undefined ? ctx.agents.get(SessionId(request.sessionId)) : undefined
         if (!agent) {
-          const h = await ctx.agents.create({ sessionId: SessionId(r.payload.sessionId ?? `session-${randomUUID()}`), meta: { cwd: w?.path ?? root }, agentOptions: { provider: 'native-fixture', model: 'native-model' } })
+          const h = await ctx.agents.create({ sessionId: SessionId(request.sessionId ?? `session-${randomUUID()}`), meta: { cwd: w?.path ?? root }, agentOptions: { provider: 'native-fixture', model: 'native-model' } })
           agent = h.agent
         }
         if (w && !w.sessionIds.includes(agent.id)) await w.attachSession(agent.id)
-        return { rpcId: r.rpcId, result: { ok: true, value: { sessionId: agent.id } } }
+        return { sessionId: agent.id }
       },
-      async rename(r) {
-        renames.push({ sessionId: r.payload.sessionId, title: r.payload.title })
-        return { rpcId: r.rpcId, result: { ok: true, value: { title: r.payload.title, seq: 1 } } }
+      async rename(request: { sessionId: string; title: string }) {
+        renames.push({ sessionId: request.sessionId, title: request.title })
+        return { title: request.title, seq: 1 }
       },
-      async prompt(r) {
-        const agent = ctx.agents.get(r.payload.sessionId)!
-        agent.followup(createUserMessage({ source: { kind: 'user' }, content: r.payload.content as { type: 'text'; text: string }[] }))
-        return { rpcId: r.rpcId, result: { ok: true, value: { accepted: true } } }
+      async prompt(request: { sessionId: string; mode: 'queue' | 'steer'; content: { type: 'text'; text: string }[] }) {
+        const agent = ctx.agents.get(SessionId(request.sessionId))!
+        agent.followup(createUserMessage({ source: { kind: 'user' }, content: request.content }))
+        return { accepted: true }
       },
-      async cancel(r) {
-        ctx.agents.get(r.payload.sessionId)!.cancel({ kind: 'parent' })
-        return { rpcId: r.rpcId, result: { ok: true, value: { accepted: true } } }
+      async cancel(request: { sessionId: string }) {
+        ctx.agents.get(SessionId(request.sessionId))!.cancel({ kind: 'parent' })
+        return { accepted: true }
       },
-    }
-    const api = { sessions } as ApiProxy
-    ctx.provide('apiProxy', api)
+    } as unknown as SessionController
+    ctx.provide('sessionController', controller)
     const workspace = await ctx.workspaceRegistry.create(cwd, 'Target')
-    const parentResult = await api.sessions.create({ rpcId: RpcId('parent'), payload: {} })
-    expect(parentResult.result.ok).toBe(true)
-    if (!parentResult.result.ok) throw Error(parentResult.result.error.message)
-    const parent = ctx.agents.get(parentResult.result.value.sessionId)!
+    const parentResult = await controller.create({})
+    const parent = ctx.agents.get(SessionId(parentResult.sessionId))!
     parent.ctx.tools.presentAs('native')
     const before = await ctx.systemPrompt.assemble({ scope: parent })
-    await ctx.plugin(chain, {})
+    // Deferred mode on purpose: this test exercises the hint -> call flow, not
+    // schema visibility; visibleTools default (true) is covered in composition.
+    await ctx.plugin(chain, { visibleTools: false })
     const after = await ctx.systemPrompt.assemble({ scope: parent })
     expect(after.tools).toEqual(before.tools)
     expect(after.sections).toEqual(before.sections)
@@ -87,8 +85,8 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
     expect(JSON.stringify(events)).toContain('你好')
     expect(JSON.stringify(events)).not.toContain('@workspace-id/')
     expect(JSON.stringify(parent.session.snapshotEvents())).toContain('Integrated:')
-    const prompt = await api.sessions.prompt({ rpcId: RpcId('continue'), payload: { sessionId: child.id, mode: 'queue', content: [{ type: 'text', text: '继续' }] } })
-    expect(prompt.result.ok).toBe(true)
+    const prompt = await controller.prompt({ sessionId: child.id, mode: 'queue', requestId: randomUUID() as SessionRequestId, content: [{ type: 'text', text: '继续' }] }, new AbortController().signal)
+    expect(prompt.accepted).toBe(true)
     await child.whenIdle()
     expect(JSON.stringify(child.session.snapshotEvents())).toContain('继续')
     const tool = ctx.tools.get('delegate_workspace')!

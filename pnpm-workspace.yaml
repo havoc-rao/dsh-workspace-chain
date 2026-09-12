@@ -97,3 +97,9 @@ overrides:
   "@deepseek-ai/dsh-util-time": 0.1.2-rc.1
   "@deepseek-ai/dsh-util-values": 0.1.2-rc.1
   "@deepseek-ai/dsh-workspace": 0.1.2-rc.1
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/dsh-api-gateway@0.1.5-rc.2'
+  - '@deepseek-ai/dsh-api-session-controller@0.1.5-rc.2'
+  - '@deepseek-ai/dsh-api-workspace-controller@0.1.5-rc.2'
+  - '@deepseek-ai/dsh-client-file-upload@0.1.5-rc.2'
+  - '@deepseek-ai/dsh-util-workspace-path@0.1.5-rc.2'

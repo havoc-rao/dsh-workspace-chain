@@ -27,6 +27,15 @@ export interface Config {
   delegationRecords?: boolean
   /** Pin the created session's title (`项目/任务摘要`) via sessions.rename; local path only. Default true. */
   pinnedTitles?: boolean
+  /**
+   * Keep the delegation tool in the session's top-level schema and the
+   * `tools:sdk` section, so every model sees it as a normal tool and can call
+   * it directly. Default true. Set false to fall back to the deferred textual
+   * declaration only (the tool is then registered but excluded from the
+   * schema, and the model is expected to emit a native tool-call that the
+   * host routes by name — some model loops do not accept out-of-schema calls).
+   */
+  visibleTools?: boolean
   targets?: Record<string, Target>
 }
 export const Config: z<Config> = z.object({
@@ -38,6 +47,7 @@ export const Config: z<Config> = z.object({
   shareSessionStore: z.boolean().default(true),
   delegationRecords: z.boolean().default(true),
   pinnedTitles: z.boolean().default(true),
+  visibleTools: z.boolean().default(true),
   targets: z.dict(z.object({
     purpose: z.string(), aliases: z.array(z.string()).default([]), cwd: z.string().required(), command: z.string().required(),
     args: z.array(z.string()).default([]), env: z.dict(z.string()).default({}),
@@ -64,6 +74,8 @@ export interface ResolvedConfig {
   maxTimeoutExtensions: number
   delegationRecords: boolean
   pinnedTitles: boolean
+  /** Keep the tool in the top-level schema and the `tools:sdk` section. Default true. */
+  visibleTools: boolean
   targets: Map<string, ResolvedTarget>
 }
 export function checkDirectory(path: string): string {
@@ -86,7 +98,7 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
   if (!Number.isSafeInteger(maxTimeoutExtensions) || maxTimeoutExtensions <= 0 || maxTimeoutExtensions > 10_000) {
     throw new TypeError('maxTimeoutExtensions must be a positive integer <= 10000')
   }
-  for (const key of ['promptEnabled', 'shareSessionStore', 'delegationRecords', 'pinnedTitles'] as const) {
+  for (const key of ['promptEnabled', 'shareSessionStore', 'delegationRecords', 'pinnedTitles', 'visibleTools'] as const) {
     if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new TypeError(`${key} must be boolean`)
   }
   if (input.targets !== undefined && (!input.targets || typeof input.targets !== 'object' || Array.isArray(input.targets))) throw new TypeError('targets must be a dictionary')
@@ -123,5 +135,5 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
     targets.set(name, { ...target, cwd, args: [...target.args ?? []], env, provider, model,
       providerName: `workspace-chain:${toolName}:${name}` })
   }
-  return { shareSessionStore: input.shareSessionStore ?? true, toolName, promptEnabled: input.promptEnabled ?? true, defaultTimeoutMs, timeoutExtensionMs, maxTimeoutExtensions, delegationRecords: input.delegationRecords ?? true, pinnedTitles: input.pinnedTitles ?? true, targets }
+  return { shareSessionStore: input.shareSessionStore ?? true, toolName, promptEnabled: input.promptEnabled ?? true, defaultTimeoutMs, timeoutExtensionMs, maxTimeoutExtensions, delegationRecords: input.delegationRecords ?? true, pinnedTitles: input.pinnedTitles ?? true, visibleTools: input.visibleTools ?? true, targets }
 }
