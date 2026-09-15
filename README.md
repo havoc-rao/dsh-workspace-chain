@@ -189,3 +189,13 @@ LLM hint 通过字段白名单只投影类型、名称和项目路径；有可�
 DSH conversation 声明通用 chain slot `conversation.message.reference`；默认条目绘制官方 chip，本插件仅接管工作区引用。输入框之外的用户消息和 steering 消息共用该入口。当前名称从 `useWorkspaces` 读取，移除后的新引用使用名称快照；没有快照的旧引用显示“工作区不可用”。hover 展示项目名称和目录，不展示 UUID。复制消息保留原始引用，渲染不修改历史或委派参数。
 
 需要同时加载带上述 slot 的 DSH conversation bundle 与本插件 bundle；仅更新插件无法为旧宿主补出该入口。
+
+## 跨工作区编辑拦截的委派助手（提权审批注入）
+
+编辑其他路径下文件被文件沙箱 hook 拦截（`[sandbox: file access denied …]`）需要提权时，本插件提供两层联动：
+
+1. **服务端自动上行 tip**：`tools/post-execute` 监听 `edit`/`write` 的结果，命中沙箱拒绝且目标路径属于另一个已登记工作区（registry workspace 或显式 SDK target，规范路径包含匹配，未创建文件按最深已存在祖先解析）时，按与 workspace hints 相同的注入方式（plugin instruction，`form: instructions`）把“该路径属于工作区 B，可将此编辑任务委派给该工作区，或继续提权等用户审批”附加到工具结果的 `additionalContexts`，随下一次模型请求进入上下文。委派工具对该 agent 不可见或目标不可委派时只说明归属，不给出工具调用指引；同一条结果已有本插件提示时不重复注入。当前会话自身工作区内的路径（普通拒绝）不产生提示。
+
+2. **审批面板查询按钮**：接管 `conversation.approval.detail` 单元（priority -10 压过官方命令行，保留 shell 命令展示）。`edit`/`write` 的提权审批挂起时显示目标路径与归属查询：进入即自动查询（可重新查询），RPC 端点 `ownerOf`（`/workspace-chain` channel，`authority: loopback`）返回可信归属列表与当前会话所属工作区。置于另一个工作区 → 展示委派建议与“复制委派指令”；属于当前工作区 → 提示正常审批提权即可；未匹配 → 提示继续提权或取消。
+
+客户端 bundle 对 `conversation.approval.detail` 与 `useChat` 的声明为结构性 shim（编译期先于宿主 ui-approval/ui-chat 类型面），运行时契约由宿主 profile 提供；宿主未组合审批 UI 时该单元不渲染，行为不变。归属查询只读（realpath + 前缀判断），不读写任何工作区内容，不自动委派。

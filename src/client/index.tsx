@@ -7,7 +7,7 @@ import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client
 import type { InputTriggerServiceContract } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { CHANNEL, isCatalog } from '../shared/catalog.js'
+import { CHANNEL, OWNER_ENDPOINT, isCatalog, isOwnerOfResult, type OwnerOfResult } from '../shared/catalog.js'
 import { createWorkspaceSource } from './source.js'
 import { DelegationRow } from './DelegationRow.js'
 import { ReferenceDock } from './ReferenceDock.js'
@@ -15,13 +15,20 @@ import { referenceInsert, type ReferenceItem } from '../shared/references.js'
 import { ReferenceMenu } from './ReferenceMenu.js'
 import { WorkspaceMessageReference, selectWorkspaceReference } from './WorkspaceMessageReference.js'
 import { ReferencePreview } from './ReferencePreview.js'
+import { EscalationDelegation } from './EscalationDelegation.js'
 export const inject = ['inputTriggers', 'connection', 'slots']
 export function apply(ctx: ClientContext): void {
+  const connection = ctx.get('connection') as unknown as ConnectionHandle
   const load = async () => {
-    const connection = ctx.get('connection') as unknown as ConnectionHandle
     const result = await connection.rpc.call(CHANNEL, 'catalog', {})
     if (!result.ok) throw new Error(result.error.message)
     if (!isCatalog(result.value)) throw new Error('Invalid workspace-chain catalog')
+    return result.value
+  }
+  const queryOwner = async (path: string, sessionId: string): Promise<OwnerOfResult> => {
+    const result = await connection.rpc.call(CHANNEL, OWNER_ENDPOINT, { path, sessionId })
+    if (!result.ok) throw new Error(result.error.message)
+    if (!isOwnerOfResult(result.value)) throw new Error('Invalid workspace-chain ownerOf result')
     return result.value
   }
   ctx.slots.inject('conversation.message.reference', () => ctx.slots.register({
@@ -84,4 +91,12 @@ export function apply(ctx: ClientContext): void {
     pending.catch(error => { if (!disposed) console.error('workspace-chain UI:', error) })
     return () => { disposed = true; remove?.() }
   })
+  // Escalation-approval detail: shadow the shipped command row (priority -10
+  // wins the single cell) with the command display plus the cross-workspace
+  // ownership query for sandbox-blocked edits. Registered via inject so the
+  // slot's declaration (owned by the approval composer) is live first.
+  ctx.slots.inject('conversation.approval.detail', () => ctx.slots.register(
+    { name: 'conversation.approval.detail', priority: -10 },
+    (props: PropsRuntime<'conversation.approval.detail'>) => <EscalationDelegation {...props} queryOwner={queryOwner} />,
+  ))
 }

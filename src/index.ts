@@ -5,6 +5,7 @@ import { resolveConfig, type Config } from './config.js'
 import { createDelegationTool } from './tool.js'
 import { mountHints } from './hints.js'
 import { mountCatalog } from './catalog.js'
+import { mountDenialHints } from './denial-hint.js'
 import { mountWorkspaceHints } from './workspace-hints.js'
 import { mountPresentation } from './presentation.js'
 export { Config } from './config.js'
@@ -27,5 +28,6 @@ export async function apply(ctx: Context, input: Config): Promise<void> {
   }
   ctx.tools.register(createDelegationTool(ctx, config))
   mountPresentation(ctx, config)
+  mountDenialHints(ctx, config)
   if (config.promptEnabled) mountHints(ctx, config)
 }
