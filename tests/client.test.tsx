@@ -76,6 +76,27 @@ it('browses project → session → fork and keyboard picks only a visible leaf'
   act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
   expect(pick).toHaveBeenCalledWith('workspace-chain', 2)
 })
+it('drills in and out with arrow keys and wraps the highlight without stealing Home/End', async () => {
+  const source = createWorkspaceSource(async () => ({ toolName: 'delegate_workspace', targets: [] }), () => refs)
+  const candidates = await source.candidates({ sessionId: 's1' as never }, { query: '', signal: new AbortController().signal, position: 'inline' })
+  const state = { open: true, hit: { trigger: '@', query: '', quoted: false, position: 'inline', span: { start: 0, end: 1, draftRev: 1 } }, generation: 1, highlight: null, groups: [{ source: 'workspace-chain', status: 'ready', items: candidates }, { source: 'file', status: 'ready', items: [{ name: 'README.md' }] }] } as const
+  const menu = { getSnapshot: () => state, subscribe: () => () => {} } as unknown as ReferenceMenuProps['menu']
+  const { element, textarea } = mountUi(<ReferenceMenu menu={menu} onPick={() => {}} onDismiss={() => {}} references={() => refs} currentWorkspace={() => 'w1'} />)
+  const press = (key: string) => act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })))
+  const selected = () => element.querySelector('[role="option"][aria-selected="true"]')?.textContent
+  expect(selected()).toContain('workspace')
+  press('ArrowUp'); expect(selected()).toContain('文件')
+  press('ArrowDown'); expect(selected()).toContain('workspace')
+  const home = new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true })
+  act(() => textarea.dispatchEvent(home))
+  expect(home.defaultPrevented).toBe(false)
+  press('ArrowRight'); press('ArrowRight')
+  expect(selected()).toContain('引用 workspace 本身')
+  press('ArrowLeft'); expect(selected()).toContain('本地项目')
+  press('ArrowLeft'); expect(selected()).toContain('workspace')
+  press('ArrowLeft')
+  expect([...element.querySelectorAll('button')].find(button => button.textContent === '全部来源')?.getAttribute('aria-pressed')).toBe('true')
+})
 it('keeps foreign-source candidates selectable and displays category paths in list mode', () => {
   const state = { open: true, hit: { trigger: '@', query: '' }, generation: 1, highlight: null, groups: [{ source: 'file', status: 'ready', items: [{ name: 'README.md' }] }] } as never
   const pick = vi.fn()

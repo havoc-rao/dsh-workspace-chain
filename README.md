@@ -164,7 +164,7 @@ child bin 不传配置参数时使用包内 `src/child.cordis.yml`。该组合�
 
 `@` 菜单由 `ReferenceMenu` 组件占用 `conversation.input.overlay` 的 `slash-menu` 单元（priority -10），卸载后恢复原菜单。入口按本项目、其他 workspace、未归属项目的 session、委托目标及其他已注册来源分类；进入项目后选择 workspace 本身或 session，进入 session 后可选择它及 fork。子代理按 origin 单独标识。分类列表和搜索结果带层级标题，避免同名项目或会话混淆。
 
-继续在输入框输入可搜索；进入某一层后，结果限制在该层。其他来源继续使用原有候选查询及 pick 接口。上下键、Enter、Esc 操作当前可见层级；点击候选保留输入框焦点。
+继续在输入框输入可搜索；进入某一层后，结果限制在该层。其他来源继续使用原有候选查询及 pick 接口。上下键移动、`→`/Enter 进入、`←`/Esc 返回上一层（根层 Esc 关闭）；Home/End 仍交给输入框移动光标；空分类不显示，避免进入死路；高亮与滚动位置随查询/层级/模式变化回到顶部。点击候选保留输入框焦点。
 
 输入栏通过 `conversation.input.left` slot 添加小型 `@` 按钮，不再占用上方独立横条。配套 `dsh-enhanced-workspace` 的 workspace 行支持排序与引用拖动，非空 session 行支持引用拖动。拖入页面时显示 portal 全屏引用遮罩，使用与原生图片遮罩相同的主题变量；侧栏区域保留排序操作。拖放协议为 `application/x-dsh-reference+json`，载荷 `{version:1,kind:"workspace"|"session",id}`；接收方以实时列表校验 ID，再通过输入框的 revision 校验接口插入，不自动发送。
 

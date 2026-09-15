@@ -81,37 +81,59 @@ export function ReferenceMenu({ menu, onPick, onDismiss, references, currentWork
     crumbs.push(node); nodes = node.children
   }
   const searching = Boolean(state.hit?.query)
-  const rows = at ? all || searching ? flattenReferences(nodes) : nodes : flattenReferences(tree)
+  // A category with no candidate is a dead end; the host menu hides ready-empty
+  // groups the same way, so drilling into one is never offered here either.
+  const rows = (at ? all || searching ? flattenReferences(nodes) : nodes : flattenReferences(tree))
+    .filter(node => !node.children || node.children.length)
   const selection = Math.min(active, Math.max(0, rows.length - 1))
   const busy = state.groups.some(group => group.status === 'pending')
+  const enter = (node: ReferenceNode) => { setPath([...crumbs.map(item => item.id), node.id]); setActive(0) }
+  const back = () => { if (!path.length) return false; setPath(path.slice(0, -1)); setActive(0); return true }
   const choose = (node: ReferenceNode) => {
-    if (node.children) { setPath([...crumbs.map(item => item.id), node.id]); setActive(0) }
+    if (node.children) enter(node)
     else if (node.pick) onPick(node.pick.source, node.pick.index)
   }
   useEffect(() => { if (!state.open) { setPath([]); setAll(false); setActive(0) } }, [state.open])
-  useEffect(() => { setActive(0) }, [state.hit?.query])
-  // The composer retains focus. Capture only navigation keys within this composer,
-  // so the native flat-menu keyboard handler cannot pick a hidden candidate.
+  // The visible row set is a pure function of the query, the drill-down path and
+  // the flat/tree toggle. Any change rebuilds it, so the highlight and the scroll
+  // position restart from the top — same as the host reducer for a new query.
+  const frame = rows.map(node => node.id).join('\u0000')
+  useEffect(() => { setActive(0) }, [frame, state.hit?.query])
+  // The composer retains focus and arbitrates the host's flat, hierarchy-blind
+  // highlight. This menu owns its own hierarchy, so navigation must beat the
+  // composer: the handler runs in document capture and reads the latest render
+  // through a ref instead of rebinding a listener on every keystroke.
+  const navigate = useRef<(event: KeyboardEvent) => boolean>(() => false)
+  useEffect(() => {
+    navigate.current = event => {
+      if (event.key === 'Escape') { if (back()) return true; onDismiss(); return true }
+      if (event.key === 'Enter') { const node = rows[selection]; if (!node) return false; choose(node); return true }
+      if (event.key === 'ArrowRight') { const node = rows[selection]; if (!node?.children) return false; enter(node); return true }
+      if (event.key === 'ArrowLeft') return back()
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (rows.length) setActive((selection + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length)
+        return true
+      }
+      return false
+    }
+  })
   useEffect(() => {
     if (!state.open) return
     const card = () => container.current?.closest('[data-composer-card]')
     const keydown = (event: KeyboardEvent) => {
       if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !(event.target instanceof Node) || !card()?.contains(event.target)) return
-      if (!['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(event.key)) return
+      if (!navigate.current(event)) return
       event.preventDefault(); event.stopImmediatePropagation()
-      if (event.key === 'Escape') {
-        if (path.length) { setPath(path.slice(0, -1)); setActive(0) } else onDismiss()
-      } else if (event.key === 'Enter') { if (rows[selection]) choose(rows[selection]) }
-      else if (rows.length) setActive((selection + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length)
     }
     const pointerdown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !container.current?.contains(event.target) && !card()?.contains(event.target)) onDismiss()
+      if (event.button !== 0 || !(event.target instanceof Node)) return
+      if (!container.current?.contains(event.target) && !card()?.contains(event.target)) onDismiss()
     }
     document.addEventListener('keydown', keydown, true)
     document.addEventListener('pointerdown', pointerdown, true)
     return () => { document.removeEventListener('keydown', keydown, true); document.removeEventListener('pointerdown', pointerdown, true) }
-  })
-  useEffect(() => { container.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }) }, [selection])
+  }, [state.open, onDismiss])
+  useEffect(() => { container.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }) }, [frame, selection])
   if (!state.open) return null
   return <div ref={container} style={surface}>
     {at && <div style={crumbBar}>
@@ -150,6 +172,7 @@ export function ReferenceMenu({ menu, onPick, onDismiss, references, currentWork
       <span>{busy ? '搜索中…' : `继续输入搜索${at ? crumbs.length ? '当前来源' : '各来源' : '命令'}`}</span>
       <span style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         <span><kbd style={keycap}>↑↓</kbd> 选择</span>
+        {at && <span><kbd style={keycap}>←→</kbd> 层级</span>}
         <span><kbd style={keycap}>Enter</kbd> {rows[selection]?.children ? '进入' : at ? '引用' : '选择'}</span>
         <span><kbd style={keycap}>Esc</kbd> {crumbs.length ? '返回' : '关闭'}</span>
       </span>
