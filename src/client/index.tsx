@@ -10,6 +10,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { CHANNEL, OWNER_ENDPOINT, isCatalog, isOwnerOfResult, type OwnerOfResult } from '../shared/catalog.js'
 import { createWorkspaceSource } from './source.js'
 import { DelegationRow } from './DelegationRow.js'
+import { armToolviewSlot } from './toolview-slot.js'
 import { ReferenceDock } from './ReferenceDock.js'
 import { referenceInsert, type ReferenceItem } from '../shared/references.js'
 import { ReferenceMenu } from './ReferenceMenu.js'
@@ -80,16 +81,19 @@ export function apply(ctx: ClientContext): void {
         return scope.bail(scope, 'slash/input-insert-reference', { reference: referenceInsert(item), span: { start: end, end, draftRev: input.draftRev } }) === true
       }} /></>
     }))
-  // Wait for the owning tool slot; catalog is refreshed on each activation and menu request.
+  // Keyed toolview ownership is async (the catalog RPC decides the wire tool
+  // name), while DSH's keyed dispatch falls back to the generic card for
+  // unclaimed keys. A single failed catalog fetch would degrade every
+  // delegation row to the plain generic card for the whole app session, so
+  // armToolviewSlot retries with bounded backoff and re-arms on every
+  // connection reset (initial connect, host restart, reconnect).
   ctx.slots.inject('tool.call.toolview', () => {
-    let disposed = false
-    let remove: (() => void) | undefined
-    const pending = load().then(catalog => {
-      if (disposed) return
-      remove = ctx.slots.register({ name: 'tool.call.toolview', key: catalog.toolName }, DelegationRow)
+    const arm = armToolviewSlot({
+      load,
+      register: toolName => ctx.slots.register({ name: 'tool.call.toolview', key: toolName }, DelegationRow),
+      onReset: listener => ctx.on('connection/reset', listener),
     })
-    pending.catch(error => { if (!disposed) console.error('workspace-chain UI:', error) })
-    return () => { disposed = true; remove?.() }
+    return () => { arm.dispose() }
   })
   // Escalation-approval detail: shadow the shipped command row (priority -10
   // wins the single cell) with the command display plus the cross-workspace
