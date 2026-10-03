@@ -4,7 +4,7 @@
 
 ## 已实现的交互
 
-1. 输入 `@`，从 workspace-chain 候选中选择目标；输入框显示工作区引用标签，工作区引用保存 ID 与名称快照；显式 SDK target 仍使用 `@workspace/project-b`。
+1. 从侧栏把 workspace 或 session 行拖入输入框插入引用（输入区 `@` 菜单、按钮与芯片 hover 预览已移除）；输入框显示工作区引用标签，工作区引用保存 ID 与名称快照；显式 SDK target 仍可使用 `@workspace/project-b` 文本引用。
 2. 服务端识别当前 query 中的目标引用、名称和 `aliases`；明确的“继续／刚才那个项目”追问可关联最近六条用户消息。只分析用户消息，不把工具输出当成用户选择。
 3. 注入可落日志的 hint，提醒模型结合当前请求、已有对话、目标职责与上游结果作判断。**提及一个项目不等于要求执行**；是否委托仍由 agent 判断。
 4. 模型调用 `delegate_workspace`。默认通过宿主 `ctx.sessionController.create({ workspaceId, agentPreset })`（`dsh-api-session-controller` 的 Session Remote，取代已退役的 `apiProxy` 网关）创建真实会话（**会话 ID 在调用时预分配，后台响应与委派记录即时携带**），再由 `sessionController.prompt` 交付自包含任务；传 `session_id` 时改为直接回复上次发布的同一会话。新会话使用宿主默认模型和父会话当前 preset，自动归入目标工作区；只显式配置的 SDK target 使用独立进程。
@@ -14,7 +14,7 @@
 
 ## 安装与构建
 
-需要 Node.js 22.16+、pnpm，以及具有 agents/tools/subagents/systemPrompt 服务的 Harness。后台需要 jobs provider 和 job tools；浏览器辅助需要 inputTriggers、slots 和 Connection。
+需要 Node.js 22.16+、pnpm，以及具有 agents/tools/subagents/systemPrompt 服务的 Harness。后台需要 jobs provider 和 job tools；浏览器辅助需要 slots 和 Connection。
 
 ```sh
 pnpm install
@@ -23,14 +23,14 @@ pnpm build
 pnpm test
 pnpm pack
 
-dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-0.1.0.tgz
+dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-0.1.1.tgz
 ```
 
 尚未发布到 npm。默认 bundle patch 的 `targets: {}` 即可使用：宿主提供 `sessionController` 与 `workspaceRegistry` 服务（web profile 的 `session-controller` 行）时，所有已登记的本地工作区都可通过引用委派。无需配置 command、环境变量或子进程模型密钥。
 
 ### 版本兼容
 
-已验证的组合：核心运行时 `0.1.2-rc.1`，`dsh-subagent-dsh-sdk` 与 SDK client **固定 `0.1.1-rc.2`**，Web 类型包 `0.1.1-rc.2`。新 provider 已改为 profile/dshBin 接口，不能直接升级替换 command/args。仓库的 `pnpm-workspace.yaml` 固定测试依赖闭包，防止上游 prerelease 范围选到不兼容版本；用于新建测试 profile 时可复用这份约束，已有 profile 应先核对宿主版本。
+已验证的组合：核心运行时 `0.1.7-rc.2`，`dsh-subagent-dsh-sdk` 与 SDK client 同步 `0.1.7-rc.2`，Web 类型包 `0.1.7-rc.2`（宿主 `dsh-host-apiproxy` 已退役，API 边界统一走 profile 的 `sessionController` 服务）。新 provider 已改为 profile/dshBin 接口，不能直接升级替换 command/args。仓库的 `pnpm-workspace.yaml` 固定测试依赖闭包，防止上游 prerelease 范围选到不兼容版本；用于新建测试 profile 时可复用这份约束，已有 profile 应先核对宿主版本。
 
 ### 宿主侧待核查（2026-09-06 三次 `aborted` 现场遗留的开放项）
 
@@ -101,9 +101,9 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
         purpose: 'Backend service: API and database work'
         aliases: [后端项目, backend]
         cwd: /absolute/path/to/project-b
-        command: node
-        # 路径必须可从 B 的 cwd 访问。推荐使用绝对路径。
-        args: [/absolute/path/to/dsh-workspace-chain/lib/child-bin.js]
+        # 缺省 profile 为 sdk；缺省 patches 为包内 src/child.patch.yml。
+        # 显式 dshBin 仅在需要自定义 dsh CLI 可执行文件时提供。
+        patches: [/absolute/path/to/your-child.patch.yml]
         env:
           DEEPSEEK_API_KEY: !!js process.env.DEEPSEEK_API_KEY
         provider: deepseek-official
@@ -111,18 +111,18 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
         maxTokens: 8192
 ```
 
-child bin 不传配置参数时使用包内 `src/child.cordis.yml`。该组合包含模型适配器、独立 agent loop、工作区指令、文件工具、shell、jobs、JSON-RPC 和会话持久化；不加载 Web UI。诊断输出到 stderr，stdout 留给 JSON-RPC。
+SDK target 的 child 由 dsh CLI 以 `sdk` headless profile（`dsh-base` + `dsh-sdk-app` 组合）启动，再叠加有序 profile patch：包内 `src/child.patch.yml` 恢复插件历史 child 调优（`maxTokensAsSuccess: false`、指令上限 32KB），不加载 Web UI，stdout 留给 JSON-RPC。`patches` 缺省使用该打包 patch；提供列表则整体替换，patch 内的 `- id: <x> disabled: true` 与 `- insert:` 块可覆盖/扩展 base 组合。
 
-可把自有 child YAML 的**绝对路径**作为第二个 args 元素；自有 YAML 在其所在项目解析插件依赖。显式 `DSH_CORDIS_CONFIG` 优先于命令行参数。B 的模型、工具及执行权限由 B 的组合决定；内置 shell/fs 是本地执行器，若需要沙箱或审批，请提供相应 child 组合。
+可配置项：`dshBin`（显式 dsh CLI 模块，缺省用 SDK 依赖的同版本 dsh）、`profile`（缺省 `sdk`）、`patches`（相对父进程 cwd 解析，加载时校验存在）、`dshHome`（child 专用 Harness home，缺省随 `shareSessionStore` 推导，见下）、`env`、`provider`/`model`/`maxTokens`。B 的模型、工具及执行权限由 profile+patch 组合决定；内置 shell/fs 是 base 的本地执行器，若需要沙箱或审批，请在 patch 中提供相应组合。
 
-目标 cwd 在加载时 realpath 校验，调用时复查。缺失 cwd/command、文件路径冒充目录、无效 timeout/env 均报配置错误。SDK 路径只接受目标名字和 task，不能指定任意目录、命令或环境变量。相对 cwd 在父进程加载时解析；command/args 按子进程执行语义解析。
+目标 cwd 在加载时 realpath 校验，调用时复查。缺失 cwd、patch 文件不存在、文件路径冒充目录、无效 timeout/env/dshHome 均报配置错误。SDK 路径只接受目标名字和 task，不能指定任意目录、命令或环境变量。相对 cwd 在父进程加载时解析；patch 路径按父进程 cwd 解析。
 
 ## SDK Store 策略
 
-- `shareSessionStore: true`：显式传父侧解析后的 `DSH_HOME`，B 写入同一个 sessions 根目录；冲突的目标 `DSH_HOME` 会被拒绝。
-- `false`：默认使用 `<目标 cwd>/.dsh-workspace-chain`，也可显式配置不同于父 home 的 `env.DSH_HOME`。**仅省略 DSH_HOME 无法隔离**，因为会回落到 `~/.dsh`。
-- 内置持久化默认 zstd，与 Harness base 对齐。若父组合使用 `compression: none` 或自定义 sessions 根目录，child 配置必须显式对齐；共享 DSH_HOME 不会自动复制父组合。
-- 环境继承由 SDK provider 的 `scrubbedParentEnv()` 完成。凭据和 `DSH_*` 默认清除；需要的值通过 target.env 显式传入。UI catalog 不包含 cwd、command、args 或 env。
+- `shareSessionStore: true`：child `dshHome` 固定为父侧解析后的 DSH_HOME，B 写入同一个 sessions 根目录；显式配置的 `dshHome`/`env.DSH_HOME` 与共享语义冲突会被拒绝。
+- `false`：child `dshHome` 默认使用 `<目标 cwd>/.dsh-workspace-chain`，也可显式配置不同于父 home 的 `dshHome` 或 `env.DSH_HOME`。**仅省略 dshHome 无法隔离**，因为会回落到 `~/.dsh`。
+- 内置持久化默认 zstd，与 Harness base 对齐。若父组合使用 `compression: none` 或自定义 sessions 根目录，child patch 必须显式对齐；共享 dshHome 不会自动复制父组合。
+- 环境继承由 SDK provider 的 `scrubbedParentEnv()` 完成。凭据和 `DSH_*` 默认清除；需要的值通过 target.env 显式传入。UI catalog 不包含 cwd、dshHome、patches 或 env。
 
 **仅 SDK 路径的限制：同 store + 正确 cwd 已实测，但不会自动挂接父 UI 的工作区会话列表。默认本地 API 路径会自动归属工作区。** 当前 provider 的 `run.id` 是父侧运行 ID，和 B 的持久化 session ID 不同，且没有暴露二者映射。因此结果卡只展示结果和后台 job ID，不提供会跳错的子会话链接，也不伪造 workspace membership。修复需要 provider 暴露真实 child session identity；本插件没有新增旁路传输。
 
@@ -160,21 +160,13 @@ child bin 不传配置参数时使用包内 `src/child.cordis.yml`。该组合�
 - 用例 D（恢复）：abort 后阅读 `<workspace>/.dsh/delegations/<id>/resume.md`，用其中样例（含 `session_id`）再次调用 `delegate_workspace`，确认任务被同一会话接收续跑（会话列表不新增条目）；会话不可用时再按样例 3 的方式新开会话续跑。
 - 宿主侧（P6）：核对会话回收策略与 `tool-jobs` wait 配置（见"宿主侧待核查"）。
 
-## 分层引用与拖放
+## 引用拖放
 
-`@` 菜单由 `ReferenceMenu` 组件占用 `conversation.input.overlay` 的 `slash-menu` 单元（priority -10），卸载后恢复原菜单。入口按本项目、其他 workspace、未归属项目的 session、委托目标及其他已注册来源分类；进入项目后选择 workspace 本身或 session，进入 session 后可选择它及 fork。子代理按 origin 单独标识。分类列表和搜索结果带层级标题，避免同名项目或会话混淆。
-
-继续在输入框输入可搜索；进入某一层后，结果限制在该层。其他来源继续使用原有候选查询及 pick 接口。上下键移动、`→`/Enter 进入、`←`/Esc 返回上一层（根层 Esc 关闭）；Home/End 仍交给输入框移动光标；空分类不显示，避免进入死路；高亮与滚动位置随查询/层级/模式变化回到顶部。点击候选保留输入框焦点。
-
-输入栏通过 `conversation.input.left` slot 添加小型 `@` 按钮，不再占用上方独立横条。配套 `dsh-enhanced-workspace` 的 workspace 行支持排序与引用拖动，非空 session 行支持引用拖动。拖入页面时显示 portal 全屏引用遮罩，使用与原生图片遮罩相同的主题变量；侧栏区域保留排序操作。拖放协议为 `application/x-dsh-reference+json`，载荷 `{version:1,kind:"workspace"|"session",id}`；接收方以实时列表校验 ID，再通过输入框的 revision 校验接口插入，不自动发送。
+输入区引用入口为纯拖放：配套 `dsh-enhanced-workspace` 的 workspace 行支持排序与引用拖动，非空 session 行支持引用拖动。拖入页面时显示 portal 全屏引用遮罩，使用与原生图片遮罩相同的主题变量；侧栏区域保留排序操作。拖放协议为 `application/x-dsh-reference+json`，载荷 `{version:1,kind:"workspace"|"session",id}`；接收方以实时列表校验 ID，再通过输入框的 revision 校验接口插入，不自动发送。原先的 `@` 候选菜单（`conversation.input.overlay`）、输入栏 `@` 按钮与输入框 chip hover 预览已移除，宿主原生 `@` 菜单恢复。
 
 原生图片 `DropOverlay` 没有公开扩展接口，因此引用层由插件独立实现，不替换附件 slot。含 `Files` 的拖动完全交由原生图片流程；全局引用层不接收普通文本或旧版仅含 workspace ID 的拖动，避免拦截文本拖放。
 
 Session 使用原生 `@[label](dsh-session:...)` 格式，历史解析依赖宿主的 session-reference 能力。Workspace 使用 `@workspace-id/<encoded-id>`，由宿主 registry 解析标题与路径，并关联同 cwd 的已配置委托目标；引用整个项目不自动加载其全部会话，也不自动添加执行权限。已有 `@workspace/<target>` 委托目标引用保持兼容。
-
-当前层级基于客户端已加载的 session/workspace 列表；不推测未提供的 fork 关系。其他来源的查询范围与召回能力由各自插件决定。
-
-输入框中的结构化 workspace/session 蓝链支持延迟 hover 预览：内部按 occurrence ID 与引用 ID 对齐，展示标题、路径、所属项目、更新时间、父会话名称和委托配置，不展示内部 ID。预览不读取整段历史；宿主未提供的分叉位置不展示。输入框目前没有 chip hover slot，插件在自身 input.left 挂载点监听当前输入卡片，按原生 chip 的矩形和 `data-occurrence` 命中；不修改 Harness 或输入框的指针行为。此预览目前作用于发送前的输入框引用，不接管历史消息里的链接。
 
 LLM hint 通过字段白名单只投影类型、名称和项目路径；有可用委托目标且宿主允许原生分派时才附加目标与调用说明。禁止序列化 registry 实体、record、host、session 列表或 logo，不在新增 hint 中披露内部 ID。工具说明仅经 `agent/pre-step` 追加到后续消息，不注册 system section。引用协议仍在内部保留稳定 ID；原生 session resolver 的历史注入不由此规则改写。
 
@@ -184,11 +176,15 @@ LLM hint 通过字段白名单只投影类型、名称和项目路径；有可�
 
 ## 已发送消息的工作区引用
 
-新引用使用 `@workspace-ref/<base64url JSON>`，JSON 仅含 `{id,label}`；名称是显示快照，委派始终按 ID 查注册表。选择、拖放、复制与发送保留同一身份。旧 `@workspace-id/<id>` 继续可用，旧草稿经过 codec 发送时可补齐名称。
+新引用使用 `@workspace-ref/<base64url JSON>`，JSON 仅含 `{id,label}`；名称是显示快照，委派始终按 ID 查注册表。拖放、复制与发送保留同一身份。旧 `@workspace-id/<id>` 继续可用；identity codec 不会自动为旧草稿补齐名称。
 
-DSH conversation 声明通用 chain slot `conversation.message.reference`；默认条目绘制官方 chip，本插件仅接管工作区引用。输入框之外的用户消息和 steering 消息共用该入口。当前名称从 `useWorkspaces` 读取，移除后的新引用使用名称快照；没有快照的旧引用显示“工作区不可用”。hover 展示项目名称和目录，不展示 UUID。复制消息保留原始引用，渲染不修改历史或委派参数。
+DSH ui-conversation 的可复用 factory `conversation.user-text` 唯一声明通用 chain slot `conversation.message.reference`（`kind: 'chain'`、`scope: 'session'`、`owner: { token: string }`）。chat 与 queue 通过 factory 投影；普通 `@` token 在文件 fallback 前交给 chain select。本插件以 priority -10 注册 `selectWorkspaceReference`，只接管完整、有效的 workspace token；文件、session wire、skill 与无效协议保持宿主处理，不增加 InputTriggerSource hook。
 
-需要同时加载带上述 slot 的 DSH conversation bundle 与本插件 bundle；仅更新插件无法为旧宿主补出该入口。
+组件从 `useWorkspaces` 读取当前名称，移除后的新引用使用名称快照；没有快照的旧引用显示本地化的“工作区不可用”。常态只展示工作区名称；使用官方 Tooltip，悬停 500ms 或键盘聚焦后仅原样展示该引用发送给 LLM 的文本（`@workspace-ref/…` 或旧版 `@workspace-id/…`），不附加路径、解码字段或解释文案。详情仅在 tooltip 打开时挂载，portal 避免消息/队列容器裁剪。组件使用官方 `ReferenceIconRegular` folder 图标与共享主题 token，保持消息/队列的行内基线和换行策略；文案归属 `workspace-chain.reference` locale namespace（中文/英文）。工作区 chip 仅作展示，没有点击导航，不应被误送到文件预览。复制消息保留原始引用，渲染不修改历史或委派参数。
+
+需要同时加载带上述 factory/slot 的 DSH conversation、chat/queue bundles 与本插件 bundle；仅更新插件无法为旧宿主补出入口。本地仍使用已发布 `0.1.7-rc.2` UI 类型，因此暂在组件保留与新宿主完全一致的 SlotMap 编译期声明；升级到包含该声明的类型包后应移除 shim、直接使用宿主类型。图标来自共享平台模块，locale 仅使用 Cordis 服务，不捆绑另一份宿主实现。
+
+开发联调执行 `NODE_ENV=development pnpm build`。官方 profile 通道加载 `lib/client.js`（模块 ID `dsh-workspace-chain`），plugin-registry 通道加载 `lib/client-registry.js`（模块 ID `dsh-external/dsh-workspace-chain`）。已链接本工作区的宿主可在重新加载插件/刷新页面后读取新 bundle；若安装的是打包副本，需要重新打包并更新安装。客户端 HMR 只有在同一 Harness checkout 的 `pnpm run dev:web` watcher 已运行并确认资源来源时才可依赖。构建、profile 挂载和真实页面验收是不同状态。
 
 ## 跨工作区编辑拦截的委派助手（提权审批注入）
 

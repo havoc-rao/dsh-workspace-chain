@@ -13,8 +13,8 @@
 
 ## 与原设计的必要差异
 
-1. 每个目标挂独立 SDK provider；command/cwd 不属于 start-time 请求。
-2. npm 发布 API 与本地源码不同。核心使用 0.1.2-rc.1，仍支持 command/args 的 provider/client 固定 0.1.1-rc.2。弃用不兼容的旧 spine bundle，child-runtime 直接组合相同版本的核心服务。
+1. 每个目标挂独立 SDK provider；profile/patches/dshHome/cwd 不属于 start-time 请求。
+2. npm 发布 API 与本地源码不同。核心使用 0.1.7-rc.2，SDK provider/client 与 Web 类型包同步 0.1.7-rc.2。弃用不兼容的旧 spine bundle，child-runtime 直接组合相同版本的核心服务。
 3. 关闭共享时显式传独立 DSH_HOME，避免默认 ~/.dsh 导致串 store。
 4. R2 **部分验证，UI 自动归属未实现**：同 store 与 cwd 成立；SDK provider 的父 run ID 与 child 持久化 session ID 不同，后者没有公开映射。真实 registry 挂接实验因该差异失败，最终不发布错误 ID、不展示虚假会话入口。测试固定这一限制。
 5. 默认持久化使用 zstd；测试为检查 JSONL 内容显式覆盖 none。自定义父 sessions 路径或编码必须由 child 配置对齐。
@@ -88,3 +88,12 @@
 - **提示文案分支**：`invocationHint` 按模式说明"已注册在顶层 tools"或"未列在顶层 tools，通过原生 tool-call 调用"；其余用法/并行/超时/回话语义不变。
 - **测试**：config 新增默认值/关闭/类型校验用例；组合测试新增可见模式断言（mount 后 `assembly.tools` 含 `delegate_workspace`，native 呈现模式）；native/组合原有前缀相等断言显式传 `visibleTools: false` 保持其"隐藏模式"语义。typecheck/build 通过，97 项测试全绿。
 - **未完成**：重启 electron 后真实会话验收（本会话工具表应直接出现 `delegate_workspace`，引用委派可被实际调用）。
+
+## 2026-09-23：移除输入框引用 UI（仅保留拖放）
+
+按用户要求瘦身输入区能力：移除「chain 核心的上下文注入」（输入框 `@` 引用菜单/候选/按钮）与「针对 input 区域的 tips 优化」（输入框 chip hover 预览），只保留关键基础能力（工具描述即 agent 上下文 + 纯执行基础）。
+
+- **删除**：`src/client/ReferenceMenu.tsx`（`conversation.input.overlay` 的 `slash-menu` 候选菜单与层级导航）、`src/client/source.ts`（inputTriggers `@` 候选源）、`src/client/ReferencePreview.tsx`（chip hover 原始信息提示气泡）、`src/client/reference-tree.ts`（仅菜单使用的层级树）。
+- **保留**：`ReferenceDock` 拖放（全屏遮罩、实时列表校验、revision 校验插入，去掉 `@` 按钮与 `open`），`WorkspaceMessageReference` 消息内引用渲染，`DelegationRow`/`EscalationDelegation`/`toolview-slot`，以及全部服务端注入（workspace-hints/hints/intent/denial-hint/presentation）不动。客户端 `inject` 去掉 `inputTriggers`，宿主原生 `@` 菜单恢复。
+- **测试**：移除 source/菜单/预览/tree 用例 7 项；拖放用例保留并去掉按钮断言。typecheck 通过，119 项测试全绿；dev 构建 dcf 注入 102 处（原 140 处）。
+- **未完成**：真实页面视觉验收（拖放路径未在浏览器实测）。
