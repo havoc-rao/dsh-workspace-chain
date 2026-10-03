@@ -4,47 +4,38 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, expect, it } from 'vitest'
 import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 import { DelegationRow } from '../src/client/DelegationRow.js'
-import { createWorkspaceSource } from '../src/client/source.js'
 const mounted: { root: Root; element: HTMLElement }[] = []
 afterEach(() => { for (const { root, element } of mounted.splice(0)) { act(() => root.unmount()); element.remove() } })
-function render(block: unknown) {
+function render(props: unknown) {
   const element = document.createElement('div'); document.body.append(element)
   const root = createRoot(element); mounted.push({ root, element })
-  act(() => root.render(<DelegationRow {...{ block } as unknown as ToolCallViewProps} />))
+  act(() => root.render(<DelegationRow {...{ useToolCallArgumentsPartial: () => '', ...props as object } as unknown as ToolCallViewProps} />))
   return { element }
 }
-it('shows workspace candidates and inserts a serializable reference chip', async () => {
-  const source = createWorkspaceSource(async () => ({ toolName: 'delegate_workspace', targets: [{ name: 'b', purpose: 'backend', aliases: ['api'] }] }))
-  const candidates = await source.candidates({ sessionId: 'a' as never }, { query: 'api', signal: new AbortController().signal, position: 'inline' })
-  expect(candidates).toHaveLength(1)
-  const pick = source.onPick({ candidate: candidates[0]!, session: { sessionId: 'a' as never }, position: 'inline', via: 'menu', span: { start: 0, end: 2, draftRev: 1 } })
-  expect(pick).toMatchObject({ insert: { ref: '@workspace/b', label: 'b', appearance: 'folder' } })
-  expect(await source.codec!.serialize('@workspace/b', new AbortController().signal)).toBe('@workspace/b')
-})
+const runningProps = { phase: 'start' as const, block: { phase: 'start', callId: 'one', argsRaw: '{"target":"backend"}' } }
 it('shows running and failed states without rendering model output as HTML', () => {
-  const running = render({ callId: 'one', argsRaw: '{"target":"backend"}' })
+  const running = render(runningProps)
   expect(running.element.textContent).toContain('正在委派')
-  const failed = render({ kind: 'tool-result', callId: 'two', call: { argsRaw: '{"target":"docs"}' }, isError: true, content: [{ type: 'text', text: '<script>bad()</script>' }] })
+  const failed = render({ phase: 'result' as const, block: { kind: 'tool-result', callId: 'two', call: { name: 'delegate_workspace', argsRaw: '{"target":"docs"}' }, isError: true, content: [{ type: 'text', text: '<script>bad()</script>' }] } })
   expect(failed.element.textContent).toContain('委派失败')
   expect(failed.element.querySelector('script')).toBeNull()
   expect(failed.element.querySelector('details')?.open).toBe(true)
 })
 it('keeps background admission distinct from a completed result', () => {
-  const background = render({ kind: 'tool-result', callId: 'three', call: null, content: [], isError: false, meta: { jobId: 'job-1' } })
+  const background = render({ phase: 'result' as const, block: { kind: 'tool-result', callId: 'three', call: null, content: [], isError: false, meta: { jobId: 'job-1' } } })
   expect(background.element.textContent).toContain('后台已启动')
   expect(background.element.textContent).not.toContain('已返回结果')
   expect(background.element.querySelector('button')).toBeNull()
 })
 it('shows the preallocated session id on background rows and a return-to-session marker for session_id calls', () => {
-  const background = render({ kind: 'tool-result', callId: 'bg', call: { argsRaw: '{"target":"backend","task":"x"}' }, content: [], isError: false, meta: { jobId: 'job-1', sessionId: 'session-planned-1' } })
+  const background = render({ phase: 'result' as const, block: { kind: 'tool-result', callId: 'bg', call: { name: 'delegate_workspace', argsRaw: '{"target":"backend","task":"x"}' }, content: [], isError: false, meta: { jobId: 'job-1', sessionId: 'session-planned-1' } } })
   expect(background.element.textContent).toContain('目标会话 session-planned-1')
-  const continued = render({ kind: 'tool-result', callId: 'cont', call: { argsRaw: '{"target":"backend","task":"y","session_id":"session-retained-2"}' }, content: [{ type: 'text', text: 'done' }], isError: false, meta: { sessionId: 'session-retained-2' } })
+  const continued = render({ phase: 'result' as const, block: { kind: 'tool-result', callId: 'cont', call: { name: 'delegate_workspace', argsRaw: '{"target":"backend","task":"y","session_id":"session-retained-2"}' }, content: [{ type: 'text', text: 'done' }], isError: false, meta: { sessionId: 'session-retained-2' } } })
   expect(continued.element.textContent).toContain('返回会话 session-retained-2')
   expect(continued.element.textContent).not.toContain('目标会话')
 })
 
 import { vi } from 'vitest'
-import { ReferenceMenu, type ReferenceMenuProps } from '../src/client/ReferenceMenu.js'
 import { ReferenceDock } from '../src/client/ReferenceDock.js'
 import { REFERENCE_MIME, type ReferenceItem } from '../src/shared/references.js'
 const refs: ReferenceItem[] = [
@@ -59,57 +50,6 @@ function mountUi(node: React.ReactNode) {
   const root = createRoot(host); mounted.push({ root, element }); act(() => root.render(node))
   return { element, textarea }
 }
-it('browses project → session → fork and keyboard picks only a visible leaf', async () => {
-  const source = createWorkspaceSource(async () => ({ toolName: 'delegate_workspace', targets: [] }), () => refs)
-  const candidates = await source.candidates({ sessionId: 's1' as never }, { query: '', signal: new AbortController().signal, position: 'inline' })
-  const state = { open: true, hit: { trigger: '@', query: '', quoted: false, position: 'inline', span: { start: 0, end: 1, draftRev: 1 } }, generation: 1, highlight: null, groups: [{ source: 'workspace-chain', status: 'ready', items: candidates }] } as const
-  const pick = vi.fn()
-  const menu = { getSnapshot: () => state, subscribe: () => () => {} } as unknown as ReferenceMenuProps['menu']
-  const { element, textarea } = mountUi(<ReferenceMenu menu={menu} onPick={pick} onDismiss={() => {}} references={() => refs} currentWorkspace={() => 'w1'} />)
-  const choose = (label: string) => {
-    const row = [...element.querySelectorAll('[role="option"]')].find(row => row.textContent?.includes(label))!
-    expect(row).toBeDefined(); act(() => row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))
-  }
-  expect(element.textContent).not.toContain('原会话')
-  choose('workspace'); choose('本地项目'); expect(element.textContent).toContain('引用 workspace 本身')
-  choose('原会话'); choose('fork · 分支会话')
-  act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
-  expect(pick).toHaveBeenCalledWith('workspace-chain', 2)
-})
-it('drills in and out with arrow keys and wraps the highlight without stealing Home/End', async () => {
-  const source = createWorkspaceSource(async () => ({ toolName: 'delegate_workspace', targets: [] }), () => refs)
-  const candidates = await source.candidates({ sessionId: 's1' as never }, { query: '', signal: new AbortController().signal, position: 'inline' })
-  const state = { open: true, hit: { trigger: '@', query: '', quoted: false, position: 'inline', span: { start: 0, end: 1, draftRev: 1 } }, generation: 1, highlight: null, groups: [{ source: 'workspace-chain', status: 'ready', items: candidates }, { source: 'file', status: 'ready', items: [{ name: 'README.md' }] }] } as const
-  const menu = { getSnapshot: () => state, subscribe: () => () => {} } as unknown as ReferenceMenuProps['menu']
-  const { element, textarea } = mountUi(<ReferenceMenu menu={menu} onPick={() => {}} onDismiss={() => {}} references={() => refs} currentWorkspace={() => 'w1'} />)
-  const press = (key: string) => act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })))
-  const selected = () => element.querySelector('[role="option"][aria-selected="true"]')?.textContent
-  expect(selected()).toContain('workspace')
-  press('ArrowUp'); expect(selected()).toContain('文件')
-  press('ArrowDown'); expect(selected()).toContain('workspace')
-  const home = new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true })
-  act(() => textarea.dispatchEvent(home))
-  expect(home.defaultPrevented).toBe(false)
-  press('ArrowRight'); press('ArrowRight')
-  expect(selected()).toContain('引用 workspace 本身')
-  press('ArrowLeft'); expect(selected()).toContain('本地项目')
-  press('ArrowLeft'); expect(selected()).toContain('workspace')
-  press('ArrowLeft')
-  expect([...element.querySelectorAll('button')].find(button => button.textContent === '全部来源')?.getAttribute('aria-pressed')).toBe('true')
-})
-it('keeps foreign-source candidates selectable and displays category paths in list mode', () => {
-  const state = { open: true, hit: { trigger: '@', query: '' }, generation: 1, highlight: null, groups: [{ source: 'file', status: 'ready', items: [{ name: 'README.md' }] }] } as never
-  const pick = vi.fn()
-  const menu = { getSnapshot: () => state, subscribe: () => () => {} } as unknown as ReferenceMenuProps['menu']
-  const { element } = mountUi(<ReferenceMenu menu={menu} onPick={pick} onDismiss={() => {}} references={() => []} currentWorkspace={() => undefined} />)
-  expect(element.textContent).not.toContain('README.md')
-  const list = [...element.querySelectorAll('button')].find(button => button.textContent === '分类列表')!
-  act(() => list.click())
-  expect(element.querySelector('[role="presentation"]')?.textContent).toBe('文件')
-  const row = [...element.querySelectorAll('[role="option"]')].find(row => row.textContent?.includes('README.md'))!
-  act(() => row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))
-  expect(pick).toHaveBeenCalledWith('file', 0)
-})
 it('drops a known session once and reports rejected insertion without sending anything', () => {
   const insert = vi.fn(() => false)
   const { element } = mountUi(<ReferenceDock items={() => refs} insert={insert} />)
@@ -119,33 +59,9 @@ it('drops a known session once and reports rejected insertion without sending an
   expect(insert).toHaveBeenCalledExactlyOnceWith(refs[1])
   expect(element.querySelector('[role="status"]')?.textContent).toContain('暂时无法插入')
 })
-it('keeps search inside the selected session when that scope has no matches', async () => {
-  const source = createWorkspaceSource(async () => ({ toolName: 'delegate_workspace', targets: [] }), () => refs)
-  const candidates = await source.candidates({ sessionId: 's1' as never }, { query: '', signal: new AbortController().signal, position: 'inline' })
-  type State = ReturnType<ReferenceMenuProps['menu']['getSnapshot']>
-  let state: State = { open: true, hit: { trigger: '@', query: '', quoted: false, position: 'inline', span: { start: 0, end: 1, draftRev: 1 } }, generation: 1, highlight: null, groups: [{ source: 'workspace-chain', status: 'ready', items: candidates }, { source: 'file', status: 'ready', items: [{ name: 'foreign.md' }] }] }
-  const listeners = new Set<() => void>()
-  const menu = { getSnapshot: () => state, subscribe: (fn: () => void) => { listeners.add(fn); return () => listeners.delete(fn) } } as unknown as ReferenceMenuProps['menu']
-  const { element } = mountUi(<ReferenceMenu menu={menu} onPick={() => {}} onDismiss={() => {}} references={() => refs} currentWorkspace={() => 'w1'} />)
-  for (const label of ['workspace', '本地项目', '原会话']) {
-    const row = [...element.querySelectorAll('[role="option"]')].find(row => row.textContent?.includes(label))!
-    act(() => row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))
-  }
-  act(() => {
-    state = { ...state, hit: { ...state.hit!, query: 'foreign' }, groups: [{ source: 'workspace-chain', status: 'ready', items: [] }, state.groups[1]!] }
-    listeners.forEach(fn => fn())
-  })
-  expect(element.textContent).toContain('当前来源没有匹配项')
-  expect(element.textContent).not.toContain('foreign.md')
-  expect(element.querySelectorAll('[role="option"]')).toHaveLength(0)
-})
 it('shows a full-page reference mask, leaves image drops and tree sorting alone, and cleans up', () => {
   const insert = vi.fn(() => true)
-  const open = vi.fn()
-  const { element } = mountUi(<ReferenceDock items={() => refs} insert={insert} open={open} />)
-  expect(element.textContent).toBe('@')
-  act(() => element.querySelector('button')!.click())
-  expect(open).toHaveBeenCalledOnce()
+  const { element } = mountUi(<ReferenceDock items={() => refs} insert={insert} />)
   const drag = (type: string, types: string[], target: Element = element) => {
     const event = new Event(type, { bubbles: true, cancelable: true })
     Object.defineProperty(event, 'dataTransfer', { value: { types, dropEffect: 'none', getData: () => JSON.stringify({ version: 1, kind: 'session', id: 's1' }) } })
@@ -168,33 +84,4 @@ it('shows a full-page reference mask, leaves image drops and tree sorting alone,
   const entry = mounted.find(entry => entry.element === element)!
   act(() => entry.root.unmount())
   expect(drag('drop', [REFERENCE_MIME]).defaultPrevented).toBe(false)
-})
-
-import { ReferencePreview, previewReference } from '../src/client/ReferencePreview.js'
-import { referenceInsert } from '../src/shared/references.js'
-it('previews the exact hovered occurrence through the textarea and exposes original fork metadata', async () => {
-  vi.useFakeTimers()
-  try {
-    const fork = { ...refs[2]!, label: '同名会话', updatedAt: 1000 }
-    const all = [refs[0]!, { ...refs[1]!, label: '同名会话' }, fork]
-    expect(previewReference(referenceInsert(fork).ref, all)?.id).toBe('s2')
-    const { element, textarea } = mountUi(<ReferencePreview occurrences={[{ occurrenceId: 9, source: 'workspace-chain', ref: referenceInsert(fork).ref, label: fork.label }]} items={() => all}
-      load={async () => ({ toolName: 'delegate_workspace', targets: [], workspaces: [{ id: 'w1', targets: ['backend'] }] })} />)
-    const chip = document.createElement('span'); chip.dataset.decoration = 'chip'; chip.dataset.occurrence = '9'; element.append(chip)
-    const rect = { left: 10, right: 100, top: 100, bottom: 120 } as DOMRect
-    chip.getClientRects = () => [rect] as unknown as DOMRectList
-    chip.getBoundingClientRect = () => rect
-    await act(async () => {
-      textarea.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 20, clientY: 110 }))
-      vi.advanceTimersByTime(300)
-      await Promise.resolve()
-    })
-    const tooltip = document.querySelector('[role="tooltip"]')!
-    expect(tooltip.textContent).toContain('Fork session')
-    expect(tooltip.textContent).not.toContain('ID：')
-    expect(tooltip.textContent).toContain('来源会话：同名会话')
-    expect(tooltip.textContent).toContain('委托配置：backend')
-    act(() => textarea.dispatchEvent(new Event('input', { bubbles: true })))
-    expect(document.querySelector('[role="tooltip"]')).toBeNull()
-  } finally { vi.useRealTimers() }
 })

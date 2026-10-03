@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
 import { act, type ComponentProps } from 'react'
 import { createRoot } from 'react-dom/client'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
+// The published primitives entry is a browser platform bundle, not a Node test module.
+// Keep this boundary mocked; host tests own the official icon artwork.
+const tooltip = vi.hoisted(() => ({ props: {} as { label: string; delayMs: number; portal: boolean; side: string } }))
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
+  Tooltip: (props: typeof tooltip.props & { children: React.ReactNode }) => { tooltip.props = props; return props.children },
+  ReferenceIconRegular: ({ kind, size }: { kind: string; size: number }) => <svg data-reference-kind={kind} width={size} height={size} aria-hidden="true" />,
+}))
+import { referenceZh, referenceEn, type ReferenceTranslate } from '../src/client/reference-locales.js'
 import { workspaceReference, workspaceReferenceIds, workspaceMentions, referenceInsert } from '../src/shared/references.js'
 import { referencedTask } from '../src/workspace-hints.js'
-import { createWorkspaceSource } from '../src/client/source.js'
 import { selectWorkspaceReference, WorkspaceMessageReference } from '../src/client/WorkspaceMessageReference.js'
 
 it('persists a Unicode display label separately from workspace identity and extracts the task', async () => {
@@ -13,29 +20,47 @@ it('persists a Unicode display label separately from workspace identity and extr
   expect(workspaceMentions(ref)).toEqual([{ ref, id: 'stable-id', label }])
   expect(workspaceReferenceIds(`${ref} @workspace-id/stable-id`)).toEqual(['stable-id'])
   expect(referencedTask(`${ref} 给他发送一个你好。`)).toBe('你好')
-  const source = createWorkspaceSource(async () => ({ toolName: 'delegate_workspace', targets: [] }), () => [{ kind: 'workspace', id: 'stable-id', label, description: '' }])
-  expect(await source.codec!.serialize('@workspace-id/stable-id', new AbortController().signal)).toBe(ref)
-  expect(await source.codec!.serialize(ref, new AbortController().signal)).toBe(ref)
-  expect(source.codec!.clipboardText(ref)).toBe(ref)
   expect(selectWorkspaceReference({ token: '@some-file/path' })).toBeNull()
   expect(selectWorkspaceReference({ token: '@workspace-ref/invalid' })).toBeNull()
+  expect(selectWorkspaceReference({ token: `${ref} trailing` })).toBeNull()
+  expect(selectWorkspaceReference({ token: `${ref}。` })).toBeNull()
+  expect(selectWorkspaceReference({ token: '@workspace-id/%ZZ' })).toBeNull()
+  expect(selectWorkspaceReference({ token: referenceInsert({ kind: 'session', id: 's1', label: 'Session', description: '' }).ref })).toBeNull()
 })
 
 it('renders old IDs using the current workspace name and new references using their saved name after removal', () => {
   const element = document.createElement('div'); document.body.append(element)
   const root = createRoot(element)
-  const paint = (token: string, items: unknown[]) => {
+  const paint = (token: string, items: unknown[], dictionary = referenceZh) => {
     const matched = selectWorkspaceReference({ token })!
-    act(() => root.render(<WorkspaceMessageReference {...{ matched, useWorkspaces: (select: (state: unknown) => unknown) => select({ items }) } as unknown as ComponentProps<typeof WorkspaceMessageReference>} />))
+    act(() => root.render(<WorkspaceMessageReference {...{ matched, t: ((key: keyof typeof referenceZh) => dictionary[key]) as ReferenceTranslate, useWorkspaces: (select: (state: unknown) => unknown) => select({ items }) } as unknown as ComponentProps<typeof WorkspaceMessageReference>} />))
   }
   try {
     paint('@workspace-id/stable-id', [{ workspaceId: 'stable-id', title: '当前名称', path: '/project' }])
     expect(element.textContent).toBe('当前名称')
-    expect(element.firstElementChild?.getAttribute('title')).toContain('/project')
+    expect(tooltip.props.label).toBe('@workspace-id/stable-id')
+    expect(tooltip.props.delayMs).toBe(500)
+    expect(tooltip.props.portal).toBe(true)
+    expect(tooltip.props.side).toBe('bottom')
+    expect(element.firstElementChild?.getAttribute('tabindex')).toBe('0')
     paint(workspaceReference('stable-id', '保存的名称'), [])
     expect(element.textContent).toBe('保存的名称')
     paint('@workspace-id/stable-id', [])
     expect(element.textContent).toBe('工作区不可用')
     expect(element.textContent).not.toContain('stable-id')
+    expect(element.querySelector('button')).toBeNull()
+    expect(element.querySelector('svg')?.getAttribute('data-reference-kind')).toBe('folder')
+    expect(element.firstElementChild?.getAttribute('style')).not.toContain('#4c8dff')
+    paint('@workspace-id/stable-id', [], referenceEn)
+    expect(element.textContent).toBe('Workspace unavailable')
+    expect(tooltip.props.label).toBe('@workspace-id/stable-id')
+    const snapshot = '<script>bad()</script> 🙂'
+    const token = workspaceReference('stable-id', snapshot)
+    paint(token, [])
+    expect(element.textContent).toBe(snapshot)
+    expect(element.querySelector('script')).toBeNull()
+    expect(element.innerHTML).not.toContain(token)
+    expect(tooltip.props.label).toBe(token)
+    expect(workspaceReferenceIds(token)).toEqual(['stable-id'])
   } finally { act(() => root.unmount()); element.remove() }
 })

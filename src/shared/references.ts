@@ -39,7 +39,9 @@ export function referenceInsert(item: ReferenceItem) {
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
   const ref = item.kind === 'workspace' ? workspaceReference(item.id, item.label)
     : `@[${item.label.replace(/[\\\]]/gu, match => `\\${match}`)}](dsh-session:${payload})`
-  return { source: 'workspace-chain', ref, label: item.label, appearance: item.kind === 'session' ? 'session' as const : 'folder' as const, clipboardText: ref }
+  // Serialization reuses the built-in `reference` source's identity codec: the
+  // ref text is already the model form (@workspace-ref/…, @[label](dsh-session:…)).
+  return { source: 'reference', ref, label: item.label, appearance: item.kind === 'session' ? 'session' as const : 'folder' as const, clipboardText: ref }
 }
 export function resolveDrop(transfer: Pick<DataTransfer, 'getData'>, items: readonly ReferenceItem[]): ReferenceItem | undefined {
   const raw = transfer.getData(REFERENCE_MIME)

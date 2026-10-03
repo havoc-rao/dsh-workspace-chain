@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { REFERENCE_MIME, resolveDrop, type ReferenceItem } from '../shared/references.js'
-export function ReferenceDock({ items, insert, open, disabled = false }: {
-  items: () => readonly ReferenceItem[]; insert: (item: ReferenceItem) => boolean; open?: () => void; disabled?: boolean
+/**
+ * Drag-only reference entry: workspace/session rows dragged from the sidebar
+ * (or any `application/x-dsh-reference+json` source) are validated against the
+ * live lists and inserted into the composer. The former `@` menu/button and
+ * hover previews were removed; this retains the drop path only.
+ */
+export function ReferenceDock({ items, insert, disabled = false }: {
+  items: () => readonly ReferenceItem[]; insert: (item: ReferenceItem) => boolean; disabled?: boolean
 }) {
   const [active, setActive] = useState(false)
   const [blocked, setBlocked] = useState(false)
@@ -44,7 +50,7 @@ export function ReferenceDock({ items, insert, open, disabled = false }: {
       if (inTree(event)) return
       event.preventDefault()
       const item = resolveDrop(transfer, latest.current.items())
-      setError(!item ? '无法识别此引用，请通过 @ 选择。' : !writable() || !latest.current.insert(item) ? '暂时无法插入，请重试或通过 @ 选择。' : '')
+      setError(!item ? '无法识别此引用，请从侧栏重新拖入。' : !writable() || !latest.current.insert(item) ? '暂时无法插入，请重试或从侧栏重新拖入。' : '')
     }
     document.addEventListener('dragenter', enter)
     document.addEventListener('dragover', over)
@@ -61,11 +67,7 @@ export function ReferenceDock({ items, insert, open, disabled = false }: {
       window.removeEventListener('blur', reset)
     }
   }, [])
-  return <span ref={anchor} aria-label="Session and workspace references" style={{ display: 'inline-flex', position: 'relative', alignItems: 'center' }}>
-    <button type="button" aria-label="添加 workspace 或 session 引用" aria-haspopup="listbox" disabled={disabled}
-      title="添加引用 · 也可将 workspace 或 session 拖入页面"
-      onMouseDown={event => event.preventDefault()} onClick={() => { setError(''); open?.() }}
-      style={{ border: 0, borderRadius: 6, width: 28, height: 28, background: 'transparent', color: 'inherit', fontSize: 18, cursor: disabled ? 'default' : 'pointer' }}>@</button>
+  return <span ref={anchor} aria-label="Session and workspace references" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
     {error && <span role="status" style={{ position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, width: 240, padding: 10, borderRadius: 8, background: 'var(--dsw-alias-bg-base, Canvas)', color: 'var(--dsw-alias-label-primary, CanvasText)', boxShadow: '0 4px 16px #0002', zIndex: 25 }}>{error}</span>}
     {active && createPortal(<div role="status" aria-label="引用拖放" style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', background: 'var(--dsw-alias-bg-mask-drop, #8883)', backdropFilter: 'blur(10px)', color: 'var(--dsw-alias-label-primary, CanvasText)', textAlign: 'center' }}>
       <span aria-hidden="true" style={{ fontSize: 56, color: 'var(--dsw-alias-label-link, #3964fe)' }}>@</span>

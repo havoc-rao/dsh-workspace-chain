@@ -2,8 +2,6 @@ import { expect, it } from 'vitest'
 import { REFERENCE_MIME, referenceInsert, resolveDrop, workspaceReferenceIds, type ReferenceItem } from '../src/shared/references.js'
 import { workspaceHint } from '../src/workspace-hints.js'
 import { resolveConfig } from '../src/config.js'
-import { createWorkspaceSource } from '../src/client/source.js'
-import { referenceTree, flattenReferences } from '../src/client/reference-tree.js'
 const items: ReferenceItem[] = [
   { kind: 'workspace', id: 'w1', label: '项目', description: process.cwd() },
   { kind: 'session', id: 's1', label: '对话', description: '', workspaceId: 'w1' },
@@ -26,32 +24,12 @@ it('resolves workspace context even with no delegation target and never invents 
   const workspaces = [{ id: 'w1', title: '项目', path: process.cwd() }]
   const empty = workspaceHint('@workspace-id/w1', workspaces, resolveConfig(), true, false)!
   expect(empty).not.toContain('delegate')
-  const config = resolveConfig({ targets: { configured: { cwd: process.cwd(), command: 'node' } } })
+  const config = resolveConfig({ targets: { configured: { cwd: process.cwd() } } })
   expect(workspaceHint('@workspace-id/w1', workspaces, config)).toContain('"targets":["configured"]')
   expect(workspaceHint('@workspace-id/missing', workspaces, config)).toContain('"unavailable":true')
 })
-it('groups project, session, fork, subagent, and foreign sources without changing pick identity', async () => {
-  const catalog: ReferenceItem[] = [...items,
-    { kind: 'workspace', id: 'w2', label: '另一个项目', description: '/other' },
-    { kind: 'session', id: 's4', label: '独立会话', description: '' },
-  ]
-  const source = createWorkspaceSource(async () => ({ toolName: 'delegate_workspace', targets: [] }), () => catalog)
-  const candidates = await source.candidates({ sessionId: 's1' as never }, { query: '', signal: new AbortController().signal, position: 'inline' })
-  const tree = referenceTree({ open: true, hit: null, generation: 1, highlight: null, groups: [
-    { source: 'workspace-chain', status: 'ready', items: candidates },
-    { source: 'file', status: 'ready', items: [{ name: 'README.md' }] },
-  ] }, catalog, 'w2')
-  expect(tree.map(node => node.label)).toEqual(['workspace', '已配置委托目标', '文件'])
-  expect(tree[0]!.children!.map(node => node.label)).toEqual(['另一个项目', '项目', '未归属工作区的会话'])
-  expect(tree[0]!.children![0]!.children![0]!.label).toBe('引用 workspace 本身')
-  const leaves = flattenReferences(tree)
-  expect(leaves.find(node => node.description?.includes('fork · 分支'))?.pick).toEqual({ source: 'workspace-chain', index: 2 })
-  expect(leaves.find(node => node.description?.includes('子代理 · 工具任务'))).toBeDefined()
-  expect(leaves.find(node => node.section?.includes('独立会话'))?.pick).toEqual({ source: 'workspace-chain', index: 5 })
-  expect(leaves.find(node => node.label === 'README.md')?.description).toBe('文件')
-})
 it('aligns a session reference to host membership and the real fresh-session tool contract', () => {
-  const config = resolveConfig({ targets: { backend: { cwd: process.cwd(), command: 'node' } } })
+  const config = resolveConfig({ targets: { backend: { cwd: process.cwd() } } })
   const workspaces = [{ id: 'w1', title: 'Backend', path: process.cwd(), sessionIds: ['s1'] }]
   const query = referenceInsert(items[1]!).ref
   const hint = workspaceHint(query, workspaces, config)!
@@ -86,7 +64,7 @@ it('explains the actual hello handoff and distinguishes missing configuration fr
   expect(blocked.text).toContain('DSH 本地会话 API 不可用')
   expect(blocked.text).toContain('不能确认已发送')
   expect(blocked.example).toBeUndefined()
-  const config = resolveConfig({ targets: { labeler: { cwd: process.cwd(), command: 'node' } } })
+  const config = resolveConfig({ targets: { labeler: { cwd: process.cwd() } } })
   const ready = workspaceHandoff(query, workspaces, config, true)
   expect(ready.example).toEqual({ target: 'labeler', task: '你好' })
   expect(ready.text).toContain('工作区交接场景')

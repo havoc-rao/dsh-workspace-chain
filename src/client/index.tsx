@@ -3,22 +3,24 @@ import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+// Type-only: pulls the SlotRegistry service merge (`ctx.slots`) into the
+// client Context, same as every other client plugin.
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import type { InputTriggerServiceContract } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { CHANNEL, OWNER_ENDPOINT, isCatalog, isOwnerOfResult, type OwnerOfResult } from '../shared/catalog.js'
-import { createWorkspaceSource } from './source.js'
 import { DelegationRow } from './DelegationRow.js'
 import { armToolviewSlot } from './toolview-slot.js'
 import { ReferenceDock } from './ReferenceDock.js'
 import { referenceInsert, type ReferenceItem } from '../shared/references.js'
-import { ReferenceMenu } from './ReferenceMenu.js'
 import { WorkspaceMessageReference, selectWorkspaceReference } from './WorkspaceMessageReference.js'
-import { ReferencePreview } from './ReferencePreview.js'
 import { EscalationDelegation } from './EscalationDelegation.js'
-export const inject = ['inputTriggers', 'connection', 'slots']
+import type {} from '@deepseek-ai/dsh-client-locale/client'
+import { REFERENCE_NS, referenceZh, referenceEn } from './reference-locales.js'
+export const inject = ['connection', 'slots', 'locale']
 export function apply(ctx: ClientContext): void {
+  ctx.effect(() => ctx.locale.register(REFERENCE_NS, { zh: referenceZh, en: referenceEn }), 'workspace-chain: reference dictionaries')
   const connection = ctx.get('connection') as unknown as ConnectionHandle
   const load = async () => {
     const result = await connection.rpc.call(CHANNEL, 'catalog', {})
@@ -33,9 +35,8 @@ export function apply(ctx: ClientContext): void {
     return result.value
   }
   ctx.slots.inject('conversation.message.reference', () => ctx.slots.register({
-    name: 'conversation.message.reference', priority: -10, select: selectWorkspaceReference,
+    name: 'conversation.message.reference', priority: -10, select: selectWorkspaceReference, locale: REFERENCE_NS,
   }, WorkspaceMessageReference))
-  const triggers = ctx.get('inputTriggers') as InputTriggerServiceContract
   const references = (): ReferenceItem[] => {
     const sessions = ctx.get('sessions') as unknown as ISessions | undefined
     const workspaces = ctx.get('workspaces') as unknown as IWorkspaces | undefined
@@ -49,37 +50,20 @@ export function apply(ctx: ClientContext): void {
       }),
     ]
   }
-  ctx.effect(() => triggers.registerSource(createWorkspaceSource(load, references)), 'workspace-chain: references')
-  ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register({
-    name: 'conversation.input.overlay', id: 'slash-menu', priority: -10, order: 0,
-    inject: sessionId => {
-      const sessions = ctx.get('sessions') as unknown as ISessions
-      const scope = sessions.scope(sessionId)
-      if (!scope) throw new Error('Reference menu session is unavailable')
-      const controller = triggers.sessionOf(scope)
-      return { menu: controller.menu, onPick: (source: string, index: number) => { controller.pick(source, index) }, onDismiss: () => controller.dismiss(),
-        references, currentWorkspace: () => {
-          const current = sessions.list.getSnapshot().byId[sessionId]
-          return (ctx.get('workspaces') as unknown as IWorkspaces | undefined)?.list.getSnapshot().items.find(item => item.sessionIds.includes(sessionId) || item.path === current?.cwd)?.workspaceId
-        } }
-    },
-  }, ReferenceMenu))
+  // Input-area entry is drag-only: sidebar workspace/session rows drop into the
+  // composer through this slot's dock (validated by `references()`), which also
+  // owns the full-screen reference mask. The former `@` menu/button and hover
+  // previews were removed.
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'workspace-chain-references', order: 30 },
     (props: PropsRuntime<'conversation.input.left'>) => {
       const input = props.useInput(state => state)
-      return <><ReferencePreview occurrences={input.occurrences} items={references} load={load} /><ReferenceDock items={references} disabled={input.phase !== 'plain'} open={() => {
-        const sessions = ctx.get('sessions') as unknown as ISessions
-        const scope = sessions.scope(props.sessionId)
-        if (!scope) return
-        const end = input.draft.length
-        scope.bail(scope, 'slash/input-insert-text', { text: `${end && !/\s$/.test(input.draft) ? ' ' : ''}@`, span: { start: end, end, draftRev: input.draftRev }, continue: true })
-      }} insert={item => {
+      return <ReferenceDock items={references} disabled={input.phase !== 'plain'} insert={item => {
         const sessions = ctx.get('sessions') as unknown as ISessions
         const scope = sessions.scope(props.sessionId)
         if (!scope) return false
         const end = input.draft.length
         return scope.bail(scope, 'slash/input-insert-reference', { reference: referenceInsert(item), span: { start: end, end, draftRev: input.draftRev } }) === true
-      }} /></>
+      }} />
     }))
   // Keyed toolview ownership is async (the catalog RPC decides the wire tool
   // name), while DSH's keyed dispatch falls back to the generic card for
