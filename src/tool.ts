@@ -239,7 +239,7 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
         const jobs = ctx.get('jobs')
         if (!jobs) throw new Error('Background jobs unavailable: load dsh-jobs-local and dsh-tool-jobs')
         const jobId = jobs.start({
-          kind: 'subagent', label: request.label, owner: parent,
+          kind: 'subagent', label: request.label, owner: parent.id,
           run: () => {
             const controller = new AbortController()
             let run: SubagentRun | undefined
@@ -260,7 +260,7 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
                 const output = await collectRun(run)
                 finalizeRecord(record, 'completed', output)
                 terminal = { output }
-                return { status: 'completed', output }
+                return { status: 'completed', result: output }
               } catch (error) {
                 const runId = run?.id
                 const diag = diagnose(state, error, mode === 'local' ? runId : undefined, runId)

@@ -1,7 +1,8 @@
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 class Delegating extends LlmAdapter {
   async *stream(options) {
-    const result = options.messages.flatMap(message => message.content).filter(b => b.type === 'tool-result').at(-1)
+    // Tool results are first-class tool-role messages in 0.1.7, not content blocks.
+    const result = options.messages.findLast(message => message.role === 'tool')
     if (!result) {
       const hint = options.messages.flatMap(m => m.content).some(b => b.type === 'text' && (b.text.includes('Workspace-chain hint:') || b.text.includes('工作区交接场景')))
       if (!hint) throw new Error('workspace hint was not injected into the real model request')
@@ -29,6 +30,12 @@ export function apply(ctx) {
   // Supply the language needed to render the existing SDK in both mode.
   // Native delegation must never execute a run_code program in these tests.
   ctx.provide('codeRuntime', {
+    language: 'typescript', isolation: 'fixture',
+    async run() { throw new Error('Unexpected run_code invocation') },
+  })
+  // `both` tool presentation needs a ctx.ptcRuntime in 0.1.7; the fake only
+  // has to satisfy schema wiring — run_code must never execute in these tests.
+  ctx.provide('ptcRuntime', {
     language: 'typescript', isolation: 'fixture',
     async run() { throw new Error('Unexpected run_code invocation') },
   })

@@ -26,7 +26,7 @@ export function mountCatalog(ctx: Context, config: ResolvedConfig): void {
         return { ok: true as const, value: ownersFor(context(), body.path, sessionId) }
       }
       return { ok: false as const, error: { code: 'internal', message: `Unknown workspace-chain endpoint: ${endpoint}`, details: {} } }
-    }, { authority: 'loopback' })
+    })
   })
 }
 const catalog = (config: ResolvedConfig): Catalog => ({ toolName: config.toolName, targets: [...config.targets].map(([name, t]) => ({ name, purpose: t.purpose ?? '', aliases: t.aliases ?? [] })) })

@@ -17,7 +17,7 @@ export function apply(ctx: Context): void {
   ctx.plugin(Sessions)
   ctx.plugin(Projections)
   ctx.plugin(Agents)
-  ctx.plugin(SystemPrompt, { persona: 'You are a coding agent. Complete the delegated task in your working directory and report the result.' })
+  ctx.plugin(SystemPrompt, { personaPrefix: 'You are a coding agent. Complete the delegated task in your working directory and report the result.' })
   ctx.plugin(Tools)
   ctx.plugin(Jobs)
   ctx.plugin(Retry)

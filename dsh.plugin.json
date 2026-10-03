@@ -1,10 +1,10 @@
 {
   "id": "dsh-external/dsh-workspace-chain",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "./lib/index.js",
   "description": "Delegate tasks to configured local workspace agents",
   "engines": {
-    "dsh": ">=0.1.2-rc.1"
+    "dsh": ">=0.1.7-rc.2"
   },
   "contributes": {
     "tools": [

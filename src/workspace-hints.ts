@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ResolvedConfig } from './config.js'
+import { workspaceChainSource } from './message-source.js'
 import { queryText } from './hints.js'
 import { sessionReferenceIds, workspaceReferenceIds, workspaceMentions } from './shared/references.js'
 import { delegationAvailable, invocationHint } from './presentation.js'
@@ -78,6 +79,6 @@ export function mountWorkspaceHints(ctx: Context, config: ResolvedConfig): void 
     if (text) text += `\n${handoff.text}`
     if (text && available && text.includes('"delegate":')) text += `\n${invocationHint(ctx, config, handoff.example)}`
     if (!text) return decision
-    return { kind: 'enter' as const, messages: [...decision.messages, createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'plugin', plugin: 'workspace-chain', form: 'instructions' } })] }
+    return { kind: 'enter' as const, messages: [...decision.messages, createUserMessage({ content: [{ type: 'text', text }], source: workspaceChainSource })] }
   })
 }

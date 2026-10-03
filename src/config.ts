@@ -1,5 +1,6 @@
-import { realpathSync, statSync } from 'node:fs'
+import { existsSync, realpathSync, statSync } from 'node:fs'
 import { resolve, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import z from '@deepseek-ai/schemastery'
 
@@ -7,8 +8,19 @@ export interface Target {
   aliases?: string[]
   purpose?: string
   cwd: string
-  command: string
-  args?: string[]
+  /** Explicit dsh CLI module for the child runtime; omission resolves the SDK dependency's same-version dsh. */
+  dshBin?: string
+  /** Named child profile (default `sdk`, the shipped headless SDK profile). */
+  profile?: string
+  /**
+   * Ordered per-launch profile patch files over the child profile. Defaults
+   * to this package's shipped `child.patch.yml`; a supplied list replaces it
+   * entirely. Relative paths resolve against the parent process cwd and each
+   * file must exist at load.
+   */
+  patches?: string[]
+  /** Absolute isolated Harness home for the child process; default derives from shareSessionStore. */
+  dshHome?: string
   env?: Record<string, string>
   provider?: string
   model?: string
@@ -49,15 +61,18 @@ export const Config: z<Config> = z.object({
   pinnedTitles: z.boolean().default(true),
   visibleTools: z.boolean().default(true),
   targets: z.dict(z.object({
-    purpose: z.string(), aliases: z.array(z.string()).default([]), cwd: z.string().required(), command: z.string().required(),
-    args: z.array(z.string()).default([]), env: z.dict(z.string()).default({}),
+    purpose: z.string(), aliases: z.array(z.string()).default([]), cwd: z.string().required(),
+    dshBin: z.string(), profile: z.string().default('sdk'), patches: z.array(z.string()).default([]),
+    dshHome: z.string(), env: z.dict(z.string()).default({}),
     provider: z.string().default('deepseek-official'), model: z.string().default('deepseek-v4-flash'),
     maxTokens: z.number(),
   })).default({}),
 })
 export interface ResolvedTarget extends Target {
   cwd: string
-  args: string[]
+  dshHome: string
+  profile: string
+  patches: string[]
   env: Record<string, string>
   provider: string
   model: string
@@ -86,6 +101,8 @@ export function checkDirectory(path: string): string {
 function nonempty(value: unknown, label: string): asserts value is string {
   if (typeof value !== 'string' || !value.trim() || value.includes('\0')) throw new TypeError(`${label} must be a non-empty string without NUL`)
 }
+/** The shipped child composition as a patch over the DSH `sdk` headless profile. */
+export const DEFAULT_CHILD_PATCH = fileURLToPath(new URL('../src/child.patch.yml', import.meta.url))
 export function resolveConfig(input: Config = {}): ResolvedConfig {
   const toolName = input.toolName ?? 'delegate_workspace'
   if (!/^[a-zA-Z0-9_-]+$/.test(toolName)) throw new TypeError('toolName must contain only letters, numbers, underscores or hyphens')
@@ -102,15 +119,20 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
     if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new TypeError(`${key} must be boolean`)
   }
   if (input.targets !== undefined && (!input.targets || typeof input.targets !== 'object' || Array.isArray(input.targets))) throw new TypeError('targets must be a dictionary')
+  if (!existsSync(DEFAULT_CHILD_PATCH)) throw new Error(`shipped child patch does not exist: ${DEFAULT_CHILD_PATCH}`)
   const home = resolveDshHome()
   const targets = new Map<string, ResolvedTarget>()
   for (const [name, target] of Object.entries(input.targets ?? {})) {
     nonempty(name, 'target name')
     if (!target || typeof target !== 'object') throw new TypeError(`target ${name} must be an object`)
     nonempty(target.cwd, `target ${name} cwd`)
-    nonempty(target.command, `target ${name} command`)
+    if (target.dshBin !== undefined) nonempty(target.dshBin, `target ${name} dshBin`)
+    if (target.profile !== undefined) nonempty(target.profile, `target ${name} profile`)
+    if (target.dshHome !== undefined) nonempty(target.dshHome, `target ${name} dshHome`)
     if (target.purpose !== undefined && typeof target.purpose !== 'string') throw new TypeError(`target ${name} purpose must be a string`)
-    if (target.args !== undefined && (!Array.isArray(target.args) || target.args.some(arg => typeof arg !== 'string' || arg.includes('\0')))) throw new TypeError(`target ${name} args must be strings without NUL`)
+    if (target.patches !== undefined && (!Array.isArray(target.patches) || target.patches.some(patch => typeof patch !== 'string' || !patch.trim()))) {
+      throw new TypeError(`target ${name} patches must be an array of non-empty strings`)
+    }
     if (target.env !== undefined && (!target.env || typeof target.env !== 'object' || Array.isArray(target.env))) throw new TypeError(`target ${name} env must be a dictionary`)
     const env = { ...target.env }
     for (const [key, value] of Object.entries(env)) {
@@ -118,22 +140,32 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
     }
     if (target.aliases !== undefined && (!Array.isArray(target.aliases) || target.aliases.some(a => typeof a !== 'string' || !a.trim()))) throw new TypeError(`target ${name} aliases must be non-empty strings`)
     const cwd = checkDirectory(resolve(target.cwd))
-    // Omission would fall back to ~/.dsh and silently rejoin the parent store.
+    // Profile patches are caller-relative and must exist before the SDK
+    // provider mounts (it re-checks them at plugin load).
+    const requestedPatches = target.patches ?? []
+    const patches = requestedPatches.length ? requestedPatches.map(patch => resolve(patch)) : [DEFAULT_CHILD_PATCH]
+    for (const patch of patches) nonempty(patch, `target ${name} patches`)
     const shared = input.shareSessionStore ?? true
+    // The child home must not silently rejoin the parent store: sharing pins
+    // it to the parent home, isolation defaults to a per-workspace store.
+    const sharedHome = resolveDshHome(target.dshHome ?? env.DSH_HOME ?? home)
     if (shared) {
-      if (env.DSH_HOME !== undefined && resolveDshHome(env.DSH_HOME) !== home) throw new Error(`target ${name}: DSH_HOME conflicts with shareSessionStore`)
+      if (sharedHome !== home) throw new Error(`target ${name}: dshHome conflicts with shareSessionStore`)
       env.DSH_HOME = home
     } else {
-      env.DSH_HOME = resolveDshHome(env.DSH_HOME ?? join(cwd, '.dsh-workspace-chain'))
-      if (env.DSH_HOME === home) throw new Error(`target ${name}: isolated DSH_HOME must differ from parent home`)
+      const dshHome = resolveDshHome(target.dshHome ?? env.DSH_HOME ?? join(cwd, '.dsh-workspace-chain'))
+      if (dshHome === home) throw new Error(`target ${name}: isolated dshHome must differ from parent home`)
+      env.DSH_HOME = dshHome
     }
     const provider = target.provider ?? 'deepseek-official'
     const model = target.model ?? 'deepseek-v4-flash'
     nonempty(provider, `target ${name} provider`)
     nonempty(model, `target ${name} model`)
     if (target.maxTokens !== undefined && (!Number.isSafeInteger(target.maxTokens) || target.maxTokens <= 0)) throw new TypeError(`target ${name} maxTokens must be a positive safe integer`)
-    targets.set(name, { ...target, cwd, args: [...target.args ?? []], env, provider, model,
-      providerName: `workspace-chain:${toolName}:${name}` })
+    targets.set(name, {
+      ...target, cwd, dshHome: env.DSH_HOME, profile: target.profile ?? 'sdk', patches, env, provider, model,
+      providerName: `workspace-chain:${toolName}:${name}`,
+    })
   }
   return { shareSessionStore: input.shareSessionStore ?? true, toolName, promptEnabled: input.promptEnabled ?? true, defaultTimeoutMs, timeoutExtensionMs, maxTimeoutExtensions, delegationRecords: input.delegationRecords ?? true, pinnedTitles: input.pinnedTitles ?? true, visibleTools: input.visibleTools ?? true, targets }
 }

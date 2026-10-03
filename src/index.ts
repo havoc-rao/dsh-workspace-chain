@@ -21,8 +21,9 @@ export async function apply(ctx: Context, input: Config): Promise<void> {
   if (config.promptEnabled) mountWorkspaceHints(ctx, config)
   for (const target of config.targets.values()) {
     await ctx.plugin(SdkProvider, {
-      providerName: target.providerName, command: target.command, args: target.args,
+      providerName: target.providerName, profile: target.profile, patches: target.patches, dshHome: target.dshHome,
       cwd: target.cwd, env: target.env, provider: target.provider, model: target.model,
+      ...target.dshBin === undefined ? {} : { dshBin: target.dshBin },
       ...target.maxTokens === undefined ? {} : { maxTokens: target.maxTokens },
     })
   }

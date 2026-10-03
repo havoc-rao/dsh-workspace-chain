@@ -27,7 +27,7 @@ it.each([false, true])('pre-step works without snapshotEvents, with SDK targets=
   // Match the actual host: no snapshotEvents property at all.
   const agent = { session: { get events() { return history } } } as unknown as Agent
   const query = createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: configured ? '继续刚才那个项目' : '@workspace-id/local 给他发送你好' }] })
-  mountHints(ctx, resolveConfig({ targets: configured ? { backend: { cwd: process.cwd(), command: 'node' } } : {} }))
+  mountHints(ctx, resolveConfig({ targets: configured ? { backend: { cwd: process.cwd() } } : {} }))
   const decision: PreStepDecision = { kind: 'enter', messages: [query] }
   const result = await hook({ agent, messages: [query] }, async () => decision)
   if (configured) {

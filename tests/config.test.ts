@@ -20,20 +20,20 @@ describe('configuration', () => {
   it('canonicalizes cwd and explicitly forwards shared home without ambient secrets', () => {
     const root = directory(); mkdirSync(join(root, 'project')); symlinkSync(join(root, 'project'), join(root, 'alias'))
     vi.stubEnv('DSH_HOME', join(root, 'home')); vi.stubEnv('SECRET_TOKEN', 'never-forward')
-    const target = resolveConfig({ targets: { b: { cwd: join(root, 'alias'), command: 'node' } } }).targets.get('b')!
+    const target = resolveConfig({ targets: { b: { cwd: join(root, 'alias') } } }).targets.get('b')!
     expect(target.cwd).toMatch(/\/project$/)
     expect(target.env).toEqual({ DSH_HOME: join(root, 'home') })
   })
   it('uses a separate home when sharing is disabled and rejects a conflicting override', () => {
     const cwd = directory(); vi.stubEnv('DSH_HOME', join(cwd, 'parent'))
-    const b = { cwd, command: 'node' }
+    const b = { cwd }
     expect(resolveConfig({ shareSessionStore: false, targets: { b } }).targets.get('b')!.env.DSH_HOME).toMatch(/\.dsh-workspace-chain$/)
     expect(() => resolveConfig({ targets: { b: { ...b, env: { DSH_HOME: join(cwd, 'other') } } } })).toThrow('conflicts')
     expect(() => resolveConfig({ shareSessionStore: false, targets: { b: { ...b, env: { DSH_HOME: join(cwd, 'parent') } } } })).toThrow('differ')
   })
   it('rejects missing fields, nonexistent directories, files, malformed env and timeouts', () => {
     const cwd = directory(); writeFileSync(join(cwd, 'file'), '')
-    for (const target of [{ cwd }, { command: 'node' }, { cwd: join(cwd, 'missing'), command: 'node' }, { cwd: join(cwd, 'file'), command: 'node' }, { cwd, command: 'node', env: { KEY: undefined } }]) {
+    for (const target of [{ purpose: 'only' }, { cwd: '' }, { cwd: join(cwd, 'missing') }, { cwd: join(cwd, 'file') }, { cwd, env: { KEY: undefined } }]) {
       expect(() => resolveConfig({ targets: { b: target } } as never)).toThrow()
     }
     for (const ms of [0, -1, NaN, Infinity, 0.5, 2147483648]) expect(() => resolveConfig({ defaultTimeoutMs: ms })).toThrow()

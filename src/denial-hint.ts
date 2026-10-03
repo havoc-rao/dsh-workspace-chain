@@ -94,9 +94,9 @@ export function mountDenialHints(ctx: Context, config: ResolvedConfig): void {
     })
     if (hint === undefined) return decision
     const already = decision.additionalContexts?.some(message =>
-      message.source.kind === 'plugin' && message.source.plugin === 'workspace-chain'
+      message.source.kind === 'workspace-chain' && message.source.plugin === 'workspace-chain'
       && message.content.some(block => block.type === 'text' && block.text.includes(DENIAL_HINT_MARK)))
     if (already) return decision
-    return { ...decision, additionalContexts: [...decision.additionalContexts ?? [], createUserMessage({ content: [{ type: 'text', text: hint }], source: { kind: 'plugin', plugin: 'workspace-chain', form: 'instructions' } })] }
+    return { ...decision, additionalContexts: [...decision.additionalContexts ?? [], createUserMessage({ content: [{ type: 'text', text: hint }], source: { kind: 'workspace-chain', plugin: 'workspace-chain', form: 'instructions' } })] }
   })
 }

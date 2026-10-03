@@ -21,7 +21,7 @@ function fixture(options: { records?: boolean; timeoutExtensionMs?: number; maxT
   const config = resolveConfig({
     defaultTimeoutMs: 30, timeoutExtensionMs: options.timeoutExtensionMs ?? 60, maxTimeoutExtensions: options.maxTimeoutExtensions ?? 5,
     shareSessionStore: false, delegationRecords: options.records ?? true,
-    targets: { b: { cwd, command: 'node', purpose: 'Backend' } },
+    targets: { b: { cwd, purpose: 'Backend' } },
   })
   const tool = createDelegationTool(ctx, config)
   const agent = { id: 'parent-1', session: { header: { cwd } } }
@@ -126,7 +126,7 @@ describe('delegation tool', () => {
     let resolveResult!: (value: unknown) => void
     let producer!: { done: Promise<unknown>; cancel: (reason?: string) => void; readOutput: () => string }
     f.start.mockResolvedValue({ id: 'child-1', result: new Promise(resolve => { resolveResult = resolve }), dispose: f.dispose } as never)
-    f.jobs.start.mockImplementation((spec: any) => { expect(spec.owner).toBe(f.exec.agent); producer = spec.run(); return 'job-1' })
+    f.jobs.start.mockImplementation((spec: any) => { expect(spec.owner).toBe(f.exec.agent!.id); producer = spec.run(); return 'job-1' })
     const result = await f.tool.execute({ target: 'b', task: 'x', run_in_background: true }, f.exec) as { kind: string; jobId: string; delegationId: string }
     expect(result).toMatchObject({ kind: 'background', jobId: 'job-1' })
     expect(result.delegationId).toMatch(/^dlg-/)
@@ -136,7 +136,7 @@ describe('delegation tool', () => {
     expect(running).toContain('delegation dlg-')
     expect(running).toContain('2 checkpoints')
     resolveResult({ stopReason: 'completed', output: [{ type: 'text', text: 'done' }] })
-    expect(await producer.done).toEqual({ status: 'completed', output: 'done' })
+    expect(await producer.done).toEqual({ status: 'completed', result: 'done' })
     expect(producer.readOutput()).toBe('done')
     expect(f.dispose).toHaveBeenCalledOnce()
     expect(progressOf(f.cwd, 'progress.md')).toContain('[result] completed')

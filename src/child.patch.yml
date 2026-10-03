@@ -1,0 +1,15 @@
+# workspace-chain child composition: one patch over the shipped `sdk`
+# headless profile (`@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-sdk-app`).
+# The SDK provider launches the dsh CLI with this patch per delegation
+# target; the base profile already composes the agent loop, model route,
+# file/shell/jobs tools, workspace instructions and sessions persistence, so
+# this patch only restores the plugin's historical child tuning.
+- id: sdk-jsonrpc-server
+  config:
+    # A child that exhausts its output-token cap is a failed delegation, not
+    # a success (parity with the pre-profile child composition).
+    maxTokensAsSuccess: false
+
+- id: agent-instructions
+  config:
+    maxBytes: 32768

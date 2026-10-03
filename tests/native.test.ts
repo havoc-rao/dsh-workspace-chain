@@ -119,7 +119,7 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
     // before the job even starts: the record and the eventually created session carry it.
     expect(background.sessionId).toMatch(/^session-/)
     expect(JSON.parse(await readFile(join(backgroundRecord, 'task.json'), 'utf8')).sessionId).toBe(background.sessionId)
-    const settled = await ctx.jobs.wait(JobId(background.jobId), 5000, parent)
+    const settled = await ctx.jobs.wait(JobId(background.jobId), 5000, parent.id)
     expect(settled.status).toBe('completed')
     // The created session carries exactly the preallocated id and lives in the workspace.
     expect(ctx.agents.get(SessionId(background.sessionId))).toBeDefined()

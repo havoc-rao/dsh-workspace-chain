@@ -57,7 +57,7 @@ const CLIENT_EXTERNALS = [
  *  INLINE_SAFE list): browser-safe contract surfaces with no runtime identity
  *  to share. Everything else under @deepseek-ai/* is either a module-table
  *  entry (external) or a leak the purity gate rejects. */
-const INLINE_SAFE = /^@deepseek-ai\/dsh-(host-apiproxy|session|llm|tools|brand)(\/|$)/
+const INLINE_SAFE = /^@deepseek-ai\/dsh-(session|llm|tools|brand)(\/|$)/
 
 /** A rolldown plugin as tsdown's config accepts it. */
 type BuildPlugin = NonNullable<UserConfig['plugins']>

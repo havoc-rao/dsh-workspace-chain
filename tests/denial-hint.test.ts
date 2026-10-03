@@ -86,7 +86,7 @@ describe('mountDenialHints', () => {
       next,
     ) as PostToolDecision
     expect(next).toHaveBeenCalledTimes(1)
-    expect(decision.additionalContexts?.[0]?.source).toMatchObject({ kind: 'plugin', plugin: 'workspace-chain', form: 'instructions' })
+    expect(decision.additionalContexts?.[0]?.source).toMatchObject({ kind: 'workspace-chain', plugin: 'workspace-chain', form: 'instructions' })
     const text = decision.additionalContexts![0]!.content.filter(b => b.type === 'text').map(b => b.text).join('')
     expect(text).toContain('工作区 "B"')
     expect(text).toContain('delegate_workspace')
@@ -96,7 +96,7 @@ describe('mountDenialHints', () => {
     const { events, ctx } = capture([owner('wa', 'A', a, ['session-a']), owner('wb', 'B', b), owner('wc', 'C', join(a, '..', 'workspace-c'))])
     mountDenialHints(ctx, config)
     const handler = events['tools/post-execute']!
-    const existing = createUserMessage({ content: [{ type: 'text', text: `${DENIAL_HINT_MARK}\nalready there` }], source: { kind: 'plugin', plugin: 'workspace-chain', form: 'instructions' } })
+    const existing = createUserMessage({ content: [{ type: 'text', text: `${DENIAL_HINT_MARK}\nalready there` }], source: { kind: 'workspace-chain', plugin: 'workspace-chain', form: 'instructions' } })
     const next = vi.fn(async (): Promise<PostToolDecision> => ({ kind: 'accept', additionalContexts: [existing] }))
     const decision = await handler(
       { name: 'write', arguments: { file_path: join(b, 'src', 'x.ts') }, agent: { id: 'session-a' } },

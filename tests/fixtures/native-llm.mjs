@@ -2,7 +2,7 @@ import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 class NativeFixture extends LlmAdapter {
   async *stream(options) {
     const blocks = options.messages.flatMap(m => m.content)
-    const result = blocks.findLast(b => b.type === 'tool-result')
+    const result = options.messages.findLast(m => m.role === 'tool')
     const hint = blocks.find(b => b.type === 'text' && b.text.includes('Deferred tool: delegate_workspace'))
     // A received delegation envelope is a delivered task, not a new user request:
     // never re-delegate the returned result (mirrors the model guidance), so the
