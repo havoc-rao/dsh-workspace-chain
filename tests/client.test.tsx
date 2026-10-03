@@ -3,15 +3,24 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, expect, it } from 'vitest'
 import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
+import { PartialArguments } from '@deepseek-ai/dsh-util-values'
 import { DelegationRow } from '../src/client/DelegationRow.js'
 const mounted: { root: Root; element: HTMLElement }[] = []
 afterEach(() => { for (const { root, element } of mounted.splice(0)) { act(() => root.unmount()); element.remove() } })
 function render(props: unknown) {
   const element = document.createElement('div'); document.body.append(element)
   const root = createRoot(element); mounted.push({ root, element })
-  act(() => root.render(<DelegationRow {...{ useToolCallArgumentsPartial: () => '', ...props as object } as unknown as ToolCallViewProps} />))
+  act(() => root.render(<DelegationRow {...props as ToolCallViewProps} />))
   return { element }
 }
+it('renders preparing calls from the host streaming argument view without the removed hook', () => {
+  const args = new PartialArguments()
+  args.append('{"target":"/projects/backend","task":"检查')
+  const { element } = render({ phase: 'preparing', block: { args } })
+  expect(element.textContent).toContain('backend')
+  expect(element.textContent).toContain('检查')
+  expect(element.textContent).toContain('正在委派')
+})
 const runningProps = { phase: 'start' as const, block: { phase: 'start', callId: 'one', argsRaw: '{"target":"backend"}' } }
 it('shows running and failed states without rendering model output as HTML', () => {
   const running = render(runningProps)

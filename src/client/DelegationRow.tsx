@@ -8,14 +8,16 @@ function Chevron() {
 }
 export function DelegationRow(props: ToolCallViewProps) {
   const settled = props.phase === 'result'
-  // Preparing calls have no dispatched arguments; the partial hook yields the
-  // forming raw prefix and '' for every other phase, so its call order is stable.
-  const argsPartial = props.useToolCallArgumentsPartial()
   let args: Record<string, unknown> = {}
-  try {
-    const raw = settled ? props.block.call?.argsRaw : props.phase === 'start' ? props.block.argsRaw : argsPartial
-    args = object(JSON.parse(raw ?? '{}'))
-  } catch { /* Streaming arguments may be incomplete. */ }
+  if (props.phase === 'preparing') {
+    // Read during render so the host tracks fields as streaming arguments grow.
+    args = Object.fromEntries(['target', 'task', 'session_id'].map(key => [key, props.block.args.text(key)]))
+  } else {
+    try {
+      const raw = props.phase === 'result' ? props.block.call?.argsRaw : props.block.argsRaw
+      args = object(JSON.parse(raw ?? '{}'))
+    } catch { /* Malformed recorded arguments must not break the row. */ }
+  }
   const meta = settled ? object(props.block.meta) : {}
   const target = typeof args.target === 'string' ? args.target : typeof meta.target === 'string' ? meta.target : '工作区'
   const project = target.replace(/[/\\]+$/u, '').split(/[/\\]/u).at(-1) || target

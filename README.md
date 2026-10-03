@@ -30,7 +30,9 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
 
 ### 版本兼容
 
-已验证的组合：核心运行时 `0.1.7-rc.2`，`dsh-subagent-dsh-sdk` 与 SDK client 同步 `0.1.7-rc.2`，Web 类型包 `0.1.7-rc.2`（宿主 `dsh-host-apiproxy` 已退役，API 边界统一走 profile 的 `sessionController` 服务）。新 provider 已改为 profile/dshBin 接口，不能直接升级替换 command/args。仓库的 `pnpm-workspace.yaml` 固定测试依赖闭包，防止上游 prerelease 范围选到不兼容版本；用于新建测试 profile 时可复用这份约束，已有 profile 应先核对宿主版本。
+已验证的组合：核心运行时 `0.2.1-alpha.1`，`dsh-subagent-dsh-sdk` 与 SDK client 同步 `0.2.1-alpha.1`，Web 类型包 `0.2.1-alpha.1`（宿主 `dsh-host-apiproxy` 已退役，API 边界统一走 profile 的 `sessionController` 服务）。新 provider 已改为 profile/dshBin 接口，不能直接升级替换 command/args。仓库的 `pnpm-workspace.yaml` 固定测试依赖闭包，防止上游 prerelease 范围选到不兼容版本；用于新建测试 profile 时可复用这份约束，已有 profile 应先核对宿主版本。
+
+当前兼容基线已从 `0.1.7-rc.2` 升至 `0.2.1-alpha.1`，旧宿主不再属于本版本支持范围。升级时同步更新 peer、SDK、UI 类型和锁文件，不能只放宽 peer 范围。已通过类型检查、开发构建与 120 项自动化测试；这些检查不代表已重新挂载 profile 或完成真实页面验收。使用本仓库 link 的 profile 可在重启宿主后读取更新；打包安装的 profile 需要重新打包安装。
 
 ### 宿主侧待核查（2026-09-06 三次 `aborted` 现场遗留的开放项）
 
@@ -182,7 +184,7 @@ DSH ui-conversation 的可复用 factory `conversation.user-text` 唯一声明�
 
 组件从 `useWorkspaces` 读取当前名称，移除后的新引用使用名称快照；没有快照的旧引用显示本地化的“工作区不可用”。常态只展示工作区名称；使用官方 Tooltip，悬停 500ms 或键盘聚焦后仅原样展示该引用发送给 LLM 的文本（`@workspace-ref/…` 或旧版 `@workspace-id/…`），不附加路径、解码字段或解释文案。详情仅在 tooltip 打开时挂载，portal 避免消息/队列容器裁剪。组件使用官方 `ReferenceIconRegular` folder 图标与共享主题 token，保持消息/队列的行内基线和换行策略；文案归属 `workspace-chain.reference` locale namespace（中文/英文）。工作区 chip 仅作展示，没有点击导航，不应被误送到文件预览。复制消息保留原始引用，渲染不修改历史或委派参数。
 
-需要同时加载带上述 factory/slot 的 DSH conversation、chat/queue bundles 与本插件 bundle；仅更新插件无法为旧宿主补出入口。本地仍使用已发布 `0.1.7-rc.2` UI 类型，因此暂在组件保留与新宿主完全一致的 SlotMap 编译期声明；升级到包含该声明的类型包后应移除 shim、直接使用宿主类型。图标来自共享平台模块，locale 仅使用 Cordis 服务，不捆绑另一份宿主实现。
+需要同时加载带上述 factory/slot 的 DSH conversation、chat/queue bundles 与本插件 bundle；仅更新插件无法为旧宿主补出入口。本地使用已发布 `0.2.1-alpha.1` UI 类型；该发布包尚未声明 `conversation.message.reference`，因此该 slot 仍保留与本地宿主一致的编译期 shim。审批详情与 `useChat` 已直接使用宿主类型，工具卡片的准备阶段通过 `block.args` 读取流式参数。图标来自共享平台模块，locale 仅使用 Cordis 服务，不捆绑另一份宿主实现。
 
 开发联调执行 `NODE_ENV=development pnpm build`。官方 profile 通道加载 `lib/client.js`（模块 ID `dsh-workspace-chain`），plugin-registry 通道加载 `lib/client-registry.js`（模块 ID `dsh-external/dsh-workspace-chain`）。已链接本工作区的宿主可在重新加载插件/刷新页面后读取新 bundle；若安装的是打包副本，需要重新打包并更新安装。客户端 HMR 只有在同一 Harness checkout 的 `pnpm run dev:web` watcher 已运行并确认资源来源时才可依赖。构建、profile 挂载和真实页面验收是不同状态。
 
