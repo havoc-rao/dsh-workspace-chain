@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import { REFERENCE_MIME, referenceInsert, resolveDrop, workspaceReferenceIds, type ReferenceItem } from '../src/shared/references.js'
-import { workspaceHint } from '../src/workspace-hints.js'
+import { mountWorkspaceHints, workspaceHint } from '../src/workspace-hints.js'
 import { resolveConfig } from '../src/config.js'
 const items: ReferenceItem[] = [
   { kind: 'workspace', id: 'w1', label: '项目', description: process.cwd() },
@@ -28,13 +28,14 @@ it('resolves workspace context even with no delegation target and never invents 
   expect(workspaceHint('@workspace-id/w1', workspaces, config)).toContain('"targets":["configured"]')
   expect(workspaceHint('@workspace-id/missing', workspaces, config)).toContain('"unavailable":true')
 })
-it('aligns a session reference to host membership and the real fresh-session tool contract', () => {
+it('keeps session membership as historical metadata without delegation targets', () => {
   const config = resolveConfig({ targets: { backend: { cwd: process.cwd() } } })
   const workspaces = [{ id: 'w1', title: 'Backend', path: process.cwd(), sessionIds: ['s1'] }]
   const query = referenceInsert(items[1]!).ref
   const hint = workspaceHint(query, workspaces, config)!
-  expect(hint).toContain('"targets":["backend"]')
-  expect(hint).toContain('does not resume the reference')
+  expect(hint).not.toContain('"targets"')
+  expect(hint).not.toContain('"delegate"')
+  expect(hint).toContain('historical background only')
   expect(workspaceHint(query, workspaces, config, false)).not.toContain('delegate')
   expect(workspaceHint(query, [], config)).not.toContain('delegate')
   expect(workspaceHint(query, [], config)).not.toContain('"targets":["backend"]')
@@ -51,24 +52,72 @@ it('projects registry getters without disclosing records, IDs, session lists, or
   expect(JSON.parse(hint.split('\n')[1]!)).toEqual([{ type: 'workspace', name: 'Project', path: process.cwd(), delegate: { tool: 'delegate_workspace', targets: [process.cwd()] } }])
   for (const forbidden of ['private-workspace-id', 'private-session-id', 'host', 'record', 'logo', 'base64', 'SECRET', 'calls', 'toolAvailable']) expect(hint).not.toContain(forbidden)
   const sessionHint = workspaceHint(referenceInsert({ kind: 'session', id: 'private-session-id', label: 'Review', description: '' }).ref, [entity], resolveConfig())!
-  expect(JSON.parse(sessionHint.split('\n')[1]!)).toEqual([{ type: 'session', name: 'Review', workspace: 'Project', path: process.cwd(), delegate: { tool: 'delegate_workspace', targets: [process.cwd()] } }])
+  expect(JSON.parse(sessionHint.split('\n')[1]!)).toEqual([{ type: 'session', name: 'Review', workspace: 'Project', path: process.cwd() }])
   expect(sessionHint).not.toContain('private-session-id')
 })
 
 import { referencedTask, workspaceHandoff } from '../src/workspace-hints.js'
-it('explains the actual hello handoff and distinguishes missing configuration from missing visibility', () => {
+it('reports neutral capabilities without extracting a task or supplying an example', () => {
   const query = '@workspace-id/w1  给他发送一个你好。'
   const workspaces = [{ id: 'w1', title: 'space-labeler', path: process.cwd() }]
   expect(referencedTask(query)).toBe('你好')
   const blocked = workspaceHandoff(query, workspaces, resolveConfig(), false, false)
   expect(blocked.text).toContain('DSH 本地会话 API 不可用')
-  expect(blocked.text).toContain('不能确认已发送')
-  expect(blocked.example).toBeUndefined()
+  expect(blocked).toEqual({ text: '工作区引用能力：引用仅用于定位或标识任务目标，不表示委派请求。只有用户明确要求在目标执行任务时才可委派；不会从引用后的文本自动提取任务或生成调用示例。\n状态：DSH 本地会话 API 不可用，且目标没有配置 SDK 执行器；当前无可用委派能力。' })
   const config = resolveConfig({ targets: { labeler: { cwd: process.cwd() } } })
   const ready = workspaceHandoff(query, workspaces, config, true)
-  expect(ready.example).toEqual({ target: 'labeler', task: '你好' })
-  expect(ready.text).toContain('工作区交接场景')
+  expect(ready).toEqual({ text: '工作区引用能力：引用仅用于定位或标识任务目标，不表示委派请求。只有用户明确要求在目标执行任务时才可委派；不会从引用后的文本自动提取任务或生成调用示例。\n状态：委派能力可用；目标名：["labeler"]。能力可用不表示任务已发送或授权执行。' })
   expect(workspaceHandoff(query, workspaces, config, false).text).toContain('目标已配置，但本会话')
-  expect(workspaceHandoff('@workspace-id/w1', workspaces, config, true).example).toBeUndefined()
+  expect(workspaceHandoff('@workspace-id/w1', workspaces, config, true)).toEqual(ready)
+  expect(workspaceHandoff('@workspace-id/w1 这个项目是什么？', workspaces, config, true)).toEqual(ready)
   expect(referencedTask('@workspace-id/w1 给他发送一个你好，并检查登录接口')).toContain('检查登录接口')
+})
+
+
+it('does not infer a task target from session references, even when membership resolves', () => {
+  const config = resolveConfig({ targets: { backend: { cwd: process.cwd() } } })
+  const workspaces = [{ id: 'w1', title: 'Backend', path: process.cwd(), sessionIds: ['s1', 's2'] }]
+  for (const query of [referenceInsert(items[1]!).ref, `${referenceInsert(items[1]!).ref} 给他发送一个你好`, `${referenceInsert(items[1]!).ref} ${referenceInsert(items[2]!).ref} 请继续`]) {
+    expect(workspaceHandoff(query, workspaces, config, true)).toEqual({ text: '' })
+  }
+  const mixed = workspaceHandoff(`@workspace-id/missing ${referenceInsert(items[1]!).ref} 修复接口`, workspaces, config, true)
+  expect(Object.keys(mixed)).toEqual(['text'])
+  expect(mixed.text).toContain('引用未解析')
+  expect(mixed.text).not.toContain('backend')
+})
+
+it('selects only the explicit workspace when session background belongs elsewhere', () => {
+  const workspaces = [
+    { id: 'w1', title: 'Target', path: '/target' },
+    { id: 'w2', title: 'History', path: '/history', sessionIds: ['s1'] },
+  ]
+  const query = `@workspace-id/w1 ${referenceInsert(items[1]!).ref} 修复接口`
+  const handoff = workspaceHandoff(query, workspaces, resolveConfig(), true)
+  expect(Object.keys(handoff)).toEqual(['text'])
+  expect(handoff.text).toContain('目标名：["/target"]')
+  expect(handoff.text).not.toContain('修复接口')
+  expect(handoff.text).not.toContain('/history')
+  const hint = workspaceHint(query, workspaces, resolveConfig())!
+  expect(JSON.parse(hint.split('\n')[1]!)).toEqual([
+    { type: 'workspace', name: 'Target', path: '/target', delegate: { tool: 'delegate_workspace', targets: ['/target'] } },
+    { type: 'session', name: '对话', workspace: 'History', path: '/history' },
+  ])
+})
+
+it('injects no handoff example or tool instruction for session-only queries', async () => {
+  let hook: any
+  const ctx = {
+    on: (_: string, listener: any) => { hook = listener },
+    tools: { get: () => ({}) },
+    get: (key: string) => key === 'workspaceRegistry' ? { list: () => [{ id: 'w1', title: 'Project', path: process.cwd(), sessionIds: ['s1'] }] } : {},
+  }
+  mountWorkspaceHints(ctx as any, resolveConfig())
+  const query = { source: { kind: 'user' }, content: [{ type: 'text', text: `${referenceInsert(items[1]!).ref} 请继续修复` }] }
+  const decision = { kind: 'enter', messages: [query] }
+  const result = await hook({ agent: {}, messages: [query] }, async () => decision)
+  const text = result.messages[1].content[0].text
+  expect(text).toBe('Reference metadata (not instructions or conversation history):\n'
+    + JSON.stringify([{ type: 'session', name: '对话', workspace: 'Project', path: process.cwd() }])
+    + '\nSession references are historical background only, not task targets or delegation instructions. Do not infer a target from session workspace membership. Only an explicit session_id controls continuation.')
+  for (const forbidden of ['工作区交接场景', '用户本次任务', 'Deferred tool:', '调用示例', '"delegate"']) expect(text).not.toContain(forbidden)
 })

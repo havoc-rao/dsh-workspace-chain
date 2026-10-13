@@ -16,7 +16,8 @@ function fixture(options: { records?: boolean; timeoutExtensionMs?: number; maxT
   const dispose = vi.fn(async () => {})
   const start = vi.fn(async () => ({ id: 'child-1', result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'done' }] }), dispose }))
   const jobs = { start: vi.fn() }
-  const ctx = { subagents: { start }, get: (key: string) => key === 'jobs' ? jobs : undefined } as unknown as Context
+  const setSession = vi.fn()
+  const ctx = { on: vi.fn(), subagents: { start }, get: (key: string) => key === 'jobs' ? jobs : undefined } as unknown as Context
   // shareSessionStore: false keeps the activity probe's session-store reads inside the temp dir.
   const config = resolveConfig({
     defaultTimeoutMs: 30, timeoutExtensionMs: options.timeoutExtensionMs ?? 60, maxTimeoutExtensions: options.maxTimeoutExtensions ?? 5,
@@ -26,7 +27,7 @@ function fixture(options: { records?: boolean; timeoutExtensionMs?: number; maxT
   const tool = createDelegationTool(ctx, config)
   const agent = { id: 'parent-1', session: { header: { cwd } } }
   const exec = { signal: new AbortController().signal, agent } as unknown as ToolRunContext
-  return { ctx, cwd, tool, exec, agent, start, dispose, config, jobs }
+  return { ctx, cwd, tool, exec, agent, start, dispose, config, jobs, setSession }
 }
 function records(cwd: string): string[] {
   const dir = join(cwd, '.dsh', 'delegations')
@@ -126,7 +127,7 @@ describe('delegation tool', () => {
     let resolveResult!: (value: unknown) => void
     let producer!: { done: Promise<unknown>; cancel: (reason?: string) => void; readOutput: () => string }
     f.start.mockResolvedValue({ id: 'child-1', result: new Promise(resolve => { resolveResult = resolve }), dispose: f.dispose } as never)
-    f.jobs.start.mockImplementation((spec: any) => { expect(spec.owner).toBe(f.exec.agent!.id); producer = spec.run(); return 'job-1' })
+    f.jobs.start.mockImplementation((spec: any) => { expect(spec.owner).toBe(f.exec.agent!.id); producer = spec.run({ setSession: f.setSession }); return 'job-1' })
     const result = await f.tool.execute({ target: 'b', task: 'x', run_in_background: true }, f.exec) as { kind: string; jobId: string; delegationId: string }
     expect(result).toMatchObject({ kind: 'background', jobId: 'job-1' })
     expect(result.delegationId).toMatch(/^dlg-/)
@@ -139,6 +140,8 @@ describe('delegation tool', () => {
     expect(await producer.done).toEqual({ status: 'completed', result: 'done' })
     expect(producer.readOutput()).toBe('done')
     expect(f.dispose).toHaveBeenCalledOnce()
+    expect(f.jobs.start).toHaveBeenCalledWith(expect.objectContaining({ kind: 'workspace-chain', label: 'x', description: 'b' }))
+    expect(f.setSession).not.toHaveBeenCalled() // SDK run ids are not Host Sessions.
     expect(progressOf(f.cwd, 'progress.md')).toContain('[result] completed')
   })
   it('settles job_kill during provider startup as killed with canceled classification', async () => {
@@ -148,7 +151,7 @@ describe('delegation tool', () => {
       await new Promise<void>(resolve => request.signal.addEventListener('abort', () => resolve(), { once: true }))
       throw new Error('startup cancelled')
     })
-    f.jobs.start.mockImplementation((spec: any) => { producer = spec.run(); return 'job-1' })
+    f.jobs.start.mockImplementation((spec: any) => { producer = spec.run({ setSession: f.setSession }); return 'job-1' })
     await f.tool.execute({ target: 'b', task: 'x', run_in_background: true }, f.exec)
     producer.cancel('user stopped job')
     const outcome = await producer.done
@@ -163,7 +166,7 @@ describe('delegation tool', () => {
       await new Promise<void>(resolve => request.signal.addEventListener('abort', () => resolve(), { once: true }))
       throw new Error('hung')
     })
-    f.jobs.start.mockImplementation((spec: any) => { producer = spec.run(); return 'job-1' })
+    f.jobs.start.mockImplementation((spec: any) => { producer = spec.run({ setSession: f.setSession }); return 'job-1' })
     await f.tool.execute({ target: 'b', task: 'x', run_in_background: true }, f.exec)
     const outcome = await producer.done
     expect(outcome).toMatchObject({ status: 'failed' })
@@ -193,11 +196,11 @@ describe('delegation tool', () => {
     await expect(f.tool.execute({ target: 'b', task: 'x', session_id: '   ' }, f.exec)).rejects.toThrow('session_id must be a non-empty string')
     expect(f.start).not.toHaveBeenCalled()
   })
-  it('rejects session references inside the task on an SDK target before spawning', async () => {
-    const f = fixture()
-    const ref = referenceInsert({ kind: 'session', id: 'session-remote', label: 'child', description: '' }).ref
-    await expect(f.tool.execute({ target: 'b', task: `发给它：${ref}` }, f.exec)).rejects.toThrow('has no re-entrant host session')
-    expect(f.start).not.toHaveBeenCalled()
+  it.each([1, 2])('accepts %s historical session references in an SDK task without routing', async count => {
+    const f = fixture({ records: false })
+    const task = Array.from({ length: count }, (_, i) => referenceInsert({ kind: 'session', id: `session-${i}`, label: 'background', description: '' }).ref).join(' ')
+    await expect(f.tool.execute({ target: 'b', task }, f.exec)).resolves.toEqual({ kind: 'foreground', output: 'done', runId: 'child-1' })
+    expect(f.start).toHaveBeenCalledWith('workspace-chain:delegate_workspace:b', expect.objectContaining({ prompt: [{ type: 'text', text: task }] }))
   })
   it('accepts an explicit title and stores it in the task book', async () => {
     const f = fixture()
@@ -287,5 +290,7 @@ it('keeps the raw task when delegation records are disabled', async () => {
     expect(hint).toContain('run_in_background: true 挂后台')
     expect(hint).toContain('超时是活动感知的')
     expect(hint).toContain('maxTimeoutExtensions')
+    expect(hint).toContain('只有显式 session_id 控制续聊')
+    expect(hint).not.toContain('执行层会把它解析为发送目标')
   })
 })

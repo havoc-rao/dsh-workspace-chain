@@ -34,6 +34,9 @@
     },
     "client": {
       "inject": [
+        "@deepseek-ai/dsh-api-job-controller",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-ui-jobs",
         "@deepseek-ai/dsh-api-session-controller",
         "@deepseek-ai/dsh-api-workspace-controller",
         "@deepseek-ai/dsh-client-connection",
@@ -91,6 +94,8 @@
     "@deepseek-ai/schemastery": "~3.18.5-alpha.1"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-api-job-controller": "link:../../deepseek-harness/packages/api/job-controller",
+    "@deepseek-ai/dsh-client-ui-workspace": "link:../../deepseek-harness/packages/client/ui-workspace",
     "@deepseek-ai/dsh-api-session-controller": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-api-workspace-controller": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-client-connection": "0.2.1-alpha.1",

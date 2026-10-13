@@ -18,6 +18,13 @@ describe('query intent', () => {
     expect(intent).toEqual({ targets: [], inherited: false, unknown: ['unknown'] })
     expect(intentHint(intent, 'delegate_workspace')).toContain('do not guess')
   })
+  it('does not treat session reference labels or encoded payloads as workspace intent', () => {
+    const wire = (label: string) => `@[${label}](dsh-session:cHJvamVjdC1i)`
+    expect(identifyIntent(wire('backend'), [], targets).targets).toEqual([])
+    expect(identifyIntent(wire('@workspace/project-b'), [], targets).targets).toEqual([])
+    expect(identifyIntent(wire('继续 backend'), ['@workspace/project-b'], targets).targets).toEqual([])
+    expect(identifyIntent(`${wire('backend')} @workspace/${encodeURIComponent('docs site')}`, [], targets).targets).toEqual(['docs site'])
+  })
   it('explains upstream context and result integration without unconditional execution', () => {
     const hint = intentHint({ targets: ['project-b'], inherited: false, unknown: [] }, 'delegate_workspace')
     expect(hint).toContain('delegate only when the user requests work')

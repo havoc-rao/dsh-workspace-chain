@@ -9,6 +9,7 @@
 3. 注入可落日志的 hint，提醒模型结合当前请求、已有对话、目标职责与上游结果作判断。**提及一个项目不等于要求执行**；是否委托仍由 agent 判断。
 4. 模型调用 `delegate_workspace`。默认通过宿主 `ctx.sessionController.create({ workspaceId, agentPreset })`（`dsh-api-session-controller` 的 Session Remote，取代已退役的 `apiProxy` 网关）创建真实会话（**会话 ID 在调用时预分配，后台响应与委派记录即时携带**），再由 `sessionController.prompt` 交付自包含任务；传 `session_id` 时改为直接回复上次发布的同一会话。新会话使用宿主默认模型和父会话当前 preset，自动归入目标工作区；只显式配置的 SDK target 使用独立进程。
 5. 前台结果直接回给 A；后台返回 job ID，由 `job_output` 收取、`job_kill` 取消。A 核对完成状态、整合结果，再回答原始请求。UI 显示目标、运行／失败／结果已返回状态和可展开的任务、结果。
+6. 后台条目使用独立 `workspace-chain` kind（显示为中英本地化“工作区委派 / Workspace delegation”），label 为显式 title 或任务摘要，description 为工作区名称（SDK 为目标名）。本地 `start` 成功取得真实宿主会话后通过 `JobHandle.setSession` 发布，结算后保留。任务卡通过框架注入 hooks 响应 jobs roster 更新；后台仅相信当前父会话 roster 的匹配 jobId，不把响应中的预分配 ID 当作可导航会话。前台成功返回真实 sessionId，已确认本地会话的失败结果附 `sessionConfirmed` presentation meta，均可“打开目标会话”。SDK run id 永不发布会话链接。导航复用 `uiWorkspace.openSession`，与详情、展开、停止分开，点击不发送消息或恢复任务，不拼 URL。
 
 空 targets 也注册后端执行能力。默认 `visibleTools: true` 把 `delegate_workspace` 作为普通工具放进会话顶层 schema 与 `tools:sdk` 段，任何模型都可直接调用；命中 query 时仍注入提示说明用法与并行/超时/回话语义。设 `visibleTools: false` 可退回"仅声明不进 schema"的 deferred 模式（工具注册在后端、用注入的文本声明引导模型发出原生 tool-call，由宿主按名路由——部分模型 loop 不接受 schema 之外的调用，故默认不再使用该模式）。支持原生调用的 native/standard 与 both 模式；宿主强制 code-only 的模式仍由宿主管理，插件不改其执行策略。
 
@@ -32,7 +33,11 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
 
 已验证的组合：核心运行时 `0.2.1-alpha.1`，`dsh-subagent-dsh-sdk` 与 SDK client 同步 `0.2.1-alpha.1`，Web 类型包 `0.2.1-alpha.1`（宿主 `dsh-host-apiproxy` 已退役，API 边界统一走 profile 的 `sessionController` 服务）。新 provider 已改为 profile/dshBin 接口，不能直接升级替换 command/args。仓库的 `pnpm-workspace.yaml` 固定测试依赖闭包，防止上游 prerelease 范围选到不兼容版本；用于新建测试 profile 时可复用这份约束，已有 profile 应先核对宿主版本。
 
-当前兼容基线已从 `0.1.7-rc.2` 升至 `0.2.1-alpha.1`，旧宿主不再属于本版本支持范围。升级时同步更新 peer、SDK、UI 类型和锁文件，不能只放宽 peer 范围。已通过类型检查、开发构建与 120 项自动化测试；这些检查不代表已重新挂载 profile 或完成真实页面验收。使用本仓库 link 的 profile 可在重启宿主后读取更新；打包安装的 profile 需要重新打包安装。
+当前兼容基线已从 `0.1.7-rc.2` 升至 `0.2.1-alpha.1`，旧宿主不再属于本版本支持范围。升级时同步更新 peer、SDK、UI 类型和锁文件，不能只放宽 peer 范围。已通过类型检查、开发构建与 145 项自动化测试；这些检查不代表已重新挂载 profile 或完成真实页面验收。使用本仓库 link 的 profile 可在重启宿主后读取更新；打包安装的 profile 需要重新打包安装。
+
+### 本地新增 jobs 契约联调
+
+本次使用宿主新增 `JobView.description/sessionId`、`JobHandle.setSession` 和 `conversation.session.jobs.kind` slot；不支持通过可选方法或强转兼容旧 jobs 版本。jobs/jobs-local 的 overrides 以及客户端 job-controller/ui-workspace dev 依赖指向相邻宿主 checkout；类型解析只将新 jobs 与 ui-jobs slot 映射到宿主已构建的发布声明，并将 Cordis、SessionId 统一解析至现有插件依赖，避免混合类型品牌。宿主需先构建 jobs/jobs-local、api/job-controller、client/ui-workspace、client/ui-jobs 及 slots 声明；正式打包发布时应同步使用包含该契约的版本、移除本地 link/source mappings，而非直接上传带本地依赖的联调配置。
 
 ### 宿主侧待核查（2026-09-06 三次 `aborted` 现场遗留的开放项）
 
@@ -47,7 +52,11 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
 
 宿主拥有新会话及其持久化生命周期；任务结束后保留会话，可从工作区列表打开并继续。**会话标题固定**：`sessions.create` 不支持 title 字段，但宿主提供 `sessions.rename`——插件在创建后立即调用它把标题固定为**任务摘要**（任务首行去格式后截断 40 字符，如 `改造 cordis.patch.yml 配置…`），让工作区会话列表直接显示"这个会话在做什么具体任务"；会话已在目标工作区分组下，标题不重复工作区名。想要 `类别/任务` 形式（如 `绘画/画一只猫`）时，在调用中显式传 `title` 即可完全自定义。`pinnedTitles: false` 可关闭（标题回退为宿主自动生成）。rename 事件不开启 turn、不清除 blank 标记；老宿主无 `rename` 或标题被拒时只记录 progress 行，不影响委派。取消/超时调用 `sessions.cancel`，失败和部分输出如实回传。插件不调用 `selectModel`，避免该接口连带修改宿主全局默认模型。当前会话的有效 preset 通过 `sessions.list` 读取。递归委派最多四层。
 
-**会话 ID 创建即得，可随时回到同一会话**：本地委派的会话 ID 由插件在调用入口**预分配**（`session-<uuid>`，宿主 `sessions.create` 契约支持显式 ID 且重试同名同工作区返回同一会话）——后台 job 的初始响应与委派记录在**任务尚未启动**时就携带 `sessionId`，进度行 `session created <id>` 确认会话落地；若老宿主拒绝预分配，自动回退为宿主生成 ID 并如实记录（以返回值/记录为准）。因此上一会话还在运行、刚刚创建、或已经超时/失败，父侧都持有它的 ID 与元数据（`delegationId`、进度/任务书/resume 路径）。要继续它时，把该 ID 作为 **`session_id`** 参数再次调用 `delegate_workspace`：任务直接送进**同一会话**（宿主幂等 adopt/resume，保留原上下文、preset 与标题，不新建会话）；会话仍在运行则消息排队等它空闲。这是重新委派的默认推荐路径——新开会话只会在目标跨会话上下文确实缺失时使用。**引用即发送**：也可以不传 `session_id`——任务文本中若恰好带一个会话引用（`@[label](dsh-session:…)`，输入框 @ 插入的 chip），执行层解析它作为发送目标，把任务送进被引用的会话（仅本地工作区目标；被引用会话必须存在且属于目标工作区，否则按对应错误如实报出）。职责分层：**引用只向模型提供会话 ID 信息 → 模型显式选择 `session_id` 与任务 → 执行层判定「用预分配 ID 新建」还是「在原会话上发送」**；显式 `session_id` 与文本引用冲突时显式参数优先。任务文本引用多个不同会话时无法自动判定，须显式传 `session_id` 消歧；SDK 目标无宿主会话可回，任务含引用时明确报错而不是静默新建。
+**会话 ID 创建即得，可随时回到同一会话**：本地委派的会话 ID 由插件在调用入口**预分配**（`session-<uuid>`，宿主 `sessions.create` 契约支持显式 ID 且重试同名同工作区返回同一会话）——后台 job 的初始响应与委派记录在**任务尚未启动**时就携带 `sessionId`，进度行 `session created <id>` 确认会话落地；预分配不代表会话已创建，只有成功取得本地 `start` 返回值后才发布可导航的确认身份（旧宿主不满足当前契约时如实失败，不以预分配 ID 启用导航）。因此上一会话还在运行、刚刚创建、或已经超时/失败，父侧都持有它的 ID 与元数据（`delegationId`、进度/任务书/resume 路径）。要继续它时，把该 ID 作为 **`session_id`** 参数再次调用 `delegate_workspace`：任务直接送进**同一会话**（宿主幂等 adopt/resume，保留原上下文、preset 与标题，不新建会话）；会话仍在运行则消息排队等它空闲。这是重新委派的默认推荐路径——新开会话只会在目标跨会话上下文确实缺失时使用。**续聊必须显式选择**：只有 `session_id` 参数决定回到哪个保留会话。任务文本中的一个或多个 `@[label](dsh-session:…)` 引用仅为历史背景，不自动选择工作区或发送目标；未传 `session_id` 时始终新建会话。本地和 SDK 任务都可携带会话引用作为背景，SDK 仍不支持显式 `session_id`。职责分层为：**引用提供历史信息 → 模型根据用户意图显式选择 target、session_id 与任务 → 执行层仅依据 session_id 判定新建或续聊**。
+
+### 引用语义升级说明
+
+旧行为曾把 session 引用所属工作区当作任务目标，并将任务内单个 session 引用自动路由到该会话；本次升级取消这两种隐式推断。只有显式工作区引用能标识定位或任务目标；引用提示统一提供中立元数据与能力状态，不将引用后的 query 转换成待委派任务，不生成默认调用示例，也不默认注入发送指令。只有用户明确要求在目标执行任务时才可委派；session 引用只提供历史背景，其归属名称/路径是元数据，不产生委派示例或工具调用指令。混合引用时，只使用显式工作区作为目标，不能因工作区引用失效而回退到 session 所属工作区。需要续聊的调用方必须迁移为显式传 `session_id`；原先任务含多个引用或 SDK 任务含引用的拒绝逻辑也已移除。引用格式与已有消息不变，升级后旧消息中的 session 引用不会再隐式触发续聊。
 
 ## 委派记录与进度协议（checkpoint）
 
@@ -130,7 +139,7 @@ SDK target 的 child 由 dsh CLI 以 `sdk` headless profile（`dsh-base` + `dsh-
 
 ## 工具与后处理
 
-参数：`target: string`、`task: string`、`run_in_background?: boolean`、`timeout_ms?: number`（覆盖默认超时，默认 `defaultTimeoutMs`，本地/SDK 路径均生效）、`title?: string`（可选，自定义固定会话标题，如 `绘画/画一只猫`；缺省为任务摘要，仅本地路径有 rename 效果，SDK 路径只写入任务书）、`session_id?: string`（**仅本地路径**：回到已发布的同一会话继续——把上次委派返回/记录的会话 ID 传入，任务直接送进该保留会话，不新建；未传时若任务文本恰好含一个 `dsh-session` 会话引用，执行层解析它作为发送目标，语义相同。详见「默认本地 API 路径」）。SDK target 传 `session_id` 会明确报错，任务文本含会话引用同样报错。task 应含相关上游结果、目标文件、预期行为和验收标准；不复制 A 的全部历史。
+参数：`target: string`、`task: string`、`run_in_background?: boolean`、`timeout_ms?: number`（覆盖默认超时，默认 `defaultTimeoutMs`，本地/SDK 路径均生效）、`title?: string`（可选，自定义固定会话标题，如 `绘画/画一只猫`；缺省为任务摘要，仅本地路径有 rename 效果，SDK 路径只写入任务书）、`session_id?: string`（**仅本地路径**：回到已发布的同一会话继续——把上次委派返回/记录的会话 ID 传入，任务直接送进该保留会话，不新建；未传时始终新建会话；任务文本中的 `dsh-session` 引用仅为历史背景，不影响路由。详见「默认本地 API 路径」）。SDK target 传 `session_id` 会明确报错，但任务文本允许携带一个或多个会话引用作为背景。task 应含相关上游结果、目标文件、预期行为和验收标准；不复制 A 的全部历史。
 
 **并行建议**：同一请求可拆成多个互不依赖的子任务时（例如只等对方返回某个 key / 契约名，或改动互不干扰的多个工作区），对可并行的部分用 `run_in_background: true` 挂后台、继续处理其他事情，最后统一用 `job_output` 收取结果并整合；只有下一步必须依赖其结果时才前台等待。工具描述与 invocation hint 已内置这一决策规则，超时活动感知语义见上文「失败诊断与等待语义」。
 
@@ -164,15 +173,25 @@ SDK target 的 child 由 dsh CLI 以 `sdk` headless profile（`dsh-base` + `dsh-
 
 ## 引用拖放
 
-输入区引用入口为纯拖放：配套 `dsh-enhanced-workspace` 的 workspace 行支持排序与引用拖动，非空 session 行支持引用拖动。拖入页面时显示 portal 全屏引用遮罩，使用与原生图片遮罩相同的主题变量；侧栏区域保留排序操作。拖放协议为 `application/x-dsh-reference+json`，载荷 `{version:1,kind:"workspace"|"session",id}`；接收方以实时列表校验 ID，再通过输入框的 revision 校验接口插入，不自动发送。原先的 `@` 候选菜单（`conversation.input.overlay`）、输入栏 `@` 按钮与输入框 chip hover 预览已移除，宿主原生 `@` 菜单恢复。
+输入区引用入口为纯拖放：配套 `dsh-enhanced-workspace` 的 workspace 行支持排序与引用拖动，非空 session 行支持引用拖动；侧栏区域保留排序操作。拖放协议为 `application/x-dsh-reference+json`，载荷 `{version:1,kind:"workspace"|"session",id}`；接收方以实时列表校验 ID，再通过输入框的 revision 校验接口插入，不自动发送。原先的 `@` 候选菜单（`conversation.input.overlay`）、输入栏 `@` 按钮与输入框 chip hover 预览已移除，宿主原生 `@` 菜单恢复。
 
-原生图片 `DropOverlay` 没有公开扩展接口，因此引用层由插件独立实现，不替换附件 slot。含 `Files` 的拖动完全交由原生图片流程；全局引用层不接收普通文本或旧版仅含 workspace ID 的拖动，避免拦截文本拖放。
+### 输入框插入 API 升级要求
+
+本地联调的 `tsconfig.json` 将 conversation/client 与 ui-slots 的类型入口映射到相邻 Harness checkout 已构建的 `lib/types`，确保使用实际公开 InputActions 及一致的 SlotMap 类型身份；package.json 与 pnpm-lock 的发布依赖不变。这只是开发类型映射，不替换客户端 runtime。发布／非相邻 checkout 构建时必须同步包含 `insertReference`／`focus` 的新版 core 类型包与宿主，再移除或调整此开发映射；仅安装旧 `0.2.1-alpha.1` 不能证明新 API 可用。
+
+宿主必须公开 `InputActions.insertReference(reference, span)` 和 `InputActions.focus()`；插件将结构化插入与 `captureInsertion()` 配对，检测捕获的插入坐标与 revision guard，避免草稿已变化后按过期位置插入。只有插入返回 true 后才同步调用公开 `focus()`，恢复 InputBar 实际 contenteditable 的焦点并由宿主保留 Lexical 选区、preventScroll；失败／锁定／未知引用／tree／Files 不 focus，不延迟、不查询 DOM 绕过 API。插件 action 类型直接派生自公开 `InputActions`。旧 core 缺少插入或 focus 方法时明确拒绝并显示本地化提示，不再通过 `scope.bail`、`execCommand` 或原文文本 fallback 伪装成功插入。
+
+引用拖放由唯一 window capture owner 处理；拖入主应用非侧栏区域时恢复与图片拖入类似的全屏 tips，可在 conversation 外区域释放，加入当前可见 composer。遮罩通过 body portal 跳出 overflow，使用 mask-drop／blur／语义色 token，pointer-events: none 保持底层真实 target；标题、说明及 blocked 状态统一走 locale，失败仍有局部反馈。侧栏树重排不被抢占，Files 完全交由图片 owner。多个 mounted dock 按宿主真实 data-conversation-session occurrence 和 DOM 可见状态选择；非 occurrence 区域只在唯一可见 dock 时接收，不猜测 split view。配套 enhanced-workspace 的旧引用 drop router 必须移除，避免重复接收/插入。升级时需同步宿主输入框 API、当前插件及配套 enhanced-workspace，不能仅替换本插件 bundle。
+
+引用层不替换附件 slot。含 `Files` 的拖动完全交由原生图片流程；全局引用层不接收普通文本或旧版仅含 workspace ID 的拖动，避免拦截文本拖放。
+
+消息气泡中的 workspace 标签本体（图标＋名称）采用与输入框 chip 相同的圆角及 hover 蓝色背景 token；仅 CSS `:hover` 改背景，不改变 hover 前后尺寸，保留自然换行和既有 Tooltip 行为。
 
 Session 使用原生 `@[label](dsh-session:...)` 格式，历史解析依赖宿主的 session-reference 能力。Workspace 使用 `@workspace-id/<encoded-id>`，由宿主 registry 解析标题与路径，并关联同 cwd 的已配置委托目标；引用整个项目不自动加载其全部会话，也不自动添加执行权限。已有 `@workspace/<target>` 委托目标引用保持兼容。
 
-LLM hint 通过字段白名单只投影类型、名称和项目路径；有可用委托目标且宿主允许原生分派时才附加目标与调用说明。禁止序列化 registry 实体、record、host、session 列表或 logo，不在新增 hint 中披露内部 ID。工具说明仅经 `agent/pre-step` 追加到后续消息，不注册 system section。引用协议仍在内部保留稳定 ID；原生 session resolver 的历史注入不由此规则改写。
+LLM hint 通过字段白名单只投影类型、名称和项目路径；只有显式工作区引用有可用委托目标且宿主允许原生分派时才附加目标能力元数据。任何工作区引用只输出中立能力状态（包含未解析／API 不可用／调用模式限制），不自动提取 query 作为任务、不生成默认调用示例、不追加 invocation 指令。session 引用的工作区归属仅为历史元数据，不推断任务目标、不附加委派示例/工具调用指令。禁止序列化 registry 实体、record、host、session 列表或 logo，不在新增 hint 中披露内部 ID。工具说明仅经 `agent/pre-step` 追加到后续消息，不注册 system section。引用协议仍在内部保留稳定 ID；原生 session resolver 的历史注入不由此规则改写。
 
-交接提示同时说明当前会话与目标工作区的职责、用户本次任务及执行状态。对于“@工作区 给他发送一个你好”，明确将“你好”作为目标 agent 的任务；唯一目标可用时直接给出该 target 的调用示例。目标未配置、引用无法解析、工具不可调用是三个不同状态，分别给出原因，不仅返回项目路径让模型猜测。只有引用而没有任务时不主动委派。此提示不会自动填充 profile 的 targets，也不会绕过目标运行配置。
+引用能力提示区分目标未配置、引用无法解析、工具不可调用等状态，但不把引用后的文字作为待执行任务，也不产生具体调用示例。是否委派必须由用户的明确执行请求决定；全屏拖放只插入引用，不发送消息或执行任务。此提示不会自动填充 profile 的 targets，也不会绕过目标运行配置。
 
 本地路径新增 API 契约 + 真实 agent loop 测试（模型 fixture），覆盖空 targets 的 query→调用→结果回流、工作区归属、会话继续及取消竞态。当前缓存的 apiproxy 实现与其 api-remotes 依赖不兼容，故测试替换宿主 API 边界，未声称完成真实宿主 API 或供应商验收。插件运行时只使用宿主提供的 API，新增依赖仅用于类型检查，不加载另一份 API 实现。
 

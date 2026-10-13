@@ -9,6 +9,10 @@ function matches(text: string, name: string): boolean {
 }
 /** Only caller-authored queries are passed here; tool results cannot forge UI selection. */
 export function identifyIntent(query: string, previousQueries: readonly string[], catalog: readonly TargetSummary[]): WorkspaceIntent {
+  // Native session wire labels are history metadata, not SDK names/aliases or
+  // continuation requests. Do not let a quoted title select a workspace.
+  query = query.replace(/@\[((?:\\.|[^\\\]])*)\]\(dsh-session:[A-Za-z0-9_-]+\)/gu, '')
+    .replace(/dsh-session:[A-Za-z0-9_-]+/gu, '')
   const explicit = [...query.matchAll(/@workspace\/([^\s<>"'`]+)/g)].flatMap(match => {
     try { return [decodeURIComponent(match[1]!)] } catch { return [match[1]!] }
   })

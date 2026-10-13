@@ -1,78 +1,107 @@
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { REFERENCE_MIME, resolveDrop, type ReferenceItem } from '../shared/references.js'
-/**
- * Drag-only reference entry: workspace/session rows dragged from the sidebar
- * (or any `application/x-dsh-reference+json` source) are validated against the
- * live lists and inserted into the composer. The former `@` menu/button and
- * hover previews were removed; this retains the drop path only.
- */
-export function ReferenceDock({ items, insert, disabled = false }: {
+import type { ReferenceTranslate } from './reference-locales.js'
+import { ReferenceDropOverlay } from './ReferenceDropOverlay.js'
+
+const mountedDocks = new Map<HTMLSpanElement, () => void>()
+function visible(anchor: HTMLElement): boolean {
+  if (!anchor.isConnected || anchor.closest('[hidden], [aria-hidden="true"], [inert]')) return false
+  for (let node: HTMLElement | null = anchor; node; node = node.parentElement) {
+    const style = getComputedStyle(node)
+    if (style.display === 'none' || style.visibility === 'hidden') return false
+  }
+  return true
+}
+
+/** Single reference-drop owner. File drops and sidebar reordering remain native. */
+export function ReferenceDock({ items, insert, disabled = false, sessionId, t }: {
   items: () => readonly ReferenceItem[]; insert: (item: ReferenceItem) => boolean; disabled?: boolean
+  sessionId: string; t: ReferenceTranslate
 }) {
   const [active, setActive] = useState(false)
   const [blocked, setBlocked] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<'invalidDrop' | 'blockedDrop' | ''>('')
   const anchor = useRef<HTMLSpanElement>(null)
-  const latest = useRef({ items, insert, disabled })
-  latest.current = { items, insert, disabled }
+  const latest = useRef({ items, insert, disabled, sessionId })
+  latest.current = { items, insert, disabled, sessionId }
   useEffect(() => {
+    const dock = anchor.current!
     let depth = 0
     const reset = () => { depth = 0; setActive(false) }
-    // Files remain owned by the native image drop layer. Plain text is not
-    // intercepted globally: browsers protect its payload during dragover.
+    mountedDocks.set(dock, reset)
     const transferOf = (event: DragEvent) => event.dataTransfer?.types.includes(REFERENCE_MIME)
       && !event.dataTransfer.types.includes('Files') ? event.dataTransfer : undefined
-    const inTree = (event: DragEvent) => event.target instanceof Element && event.target.closest('[role="treeitem"], [role="tree"], [data-dsh-enhanced-workspace="browser"]') !== null
+    const owns = (event: DragEvent) => {
+      const target = event.target instanceof Element ? event.target : null
+      if (!target || target.closest('[role="treeitem"], [role="tree"], [data-dsh-enhanced-workspace="browser"]')) return false
+      if (!visible(dock)) return false
+      // Core's resident ConversationContent publishes this real session marker.
+      // A targeted visible occurrence wins; outside it, accept only when exactly
+      // one visible dock exists, rather than guessing which split view is current.
+      const occurrence = target.closest('[data-conversation-session]')
+      const candidates = [...mountedDocks.keys()].filter(visible)
+      if (occurrence) return candidates.find(candidate => occurrence.contains(candidate)) === dock
+        && occurrence.getAttribute('data-conversation-session') === latest.current.sessionId
+      return candidates.length === 1 && candidates[0] === dock
+    }
     const writable = () => {
       const input = anchor.current?.closest('[data-composer-card]')?.querySelector('textarea')
       return !latest.current.disabled && !(input?.disabled || input?.readOnly)
     }
-    const enter = (event: DragEvent) => {
-      if (!transferOf(event) || inTree(event)) return
-      event.preventDefault(); depth += 1; setBlocked(!writable()); setActive(true)
+    const claim = (event: DragEvent) => {
+      // A capture claim suppresses other docks' listeners too, so reset their
+      // previous overlays explicitly when ownership changes between occurrences.
+      for (const [candidate, clear] of mountedDocks) if (candidate !== dock) clear()
+      event.preventDefault(); event.stopImmediatePropagation()
     }
     const over = (event: DragEvent) => {
       const transfer = transferOf(event)
-      if (!transfer) return
-      if (inTree(event)) { reset(); return }
-      event.preventDefault(); transfer.dropEffect = writable() ? 'copy' : 'none'; setBlocked(!writable()); setActive(true)
+      if (!transfer || !owns(event)) { reset(); return }
+      claim(event); transfer.dropEffect = writable() ? 'copy' : 'none'; setBlocked(!writable()); setError(''); setActive(true)
+    }
+    const enter = (event: DragEvent) => {
+      if (transferOf(event) && owns(event)) depth += 1
+      over(event)
     }
     const leave = (event: DragEvent) => {
       if (!transferOf(event)) return
       depth = Math.max(0, depth - 1)
-      if (!depth || event.relatedTarget === null) reset()
+      const target = event.relatedTarget instanceof Element ? event.relatedTarget : null
+      if (target) {
+        if (target.closest('[role="treeitem"], [role="tree"], [data-dsh-enhanced-workspace="browser"]')) reset()
+        return
+      }
+      const leftViewport = event.clientX <= 0 || event.clientY <= 0 || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight
+      if (!depth || ((event.target === document.body || event.target === document.documentElement) && leftViewport)) reset()
     }
     const drop = (event: DragEvent) => {
       const transfer = transferOf(event)
-      if (!transfer) return
       reset()
-      if (inTree(event)) return
-      event.preventDefault()
+      if (!transfer || !owns(event)) return
+      // Claim BEFORE parsing/validation/insertion. Even rejected references must
+      // not reach another listener or become raw browser text in the editor.
+      claim(event)
       const item = resolveDrop(transfer, latest.current.items())
-      setError(!item ? '无法识别此引用，请从侧栏重新拖入。' : !writable() || !latest.current.insert(item) ? '暂时无法插入，请重试或从侧栏重新拖入。' : '')
+      setError(!item ? 'invalidDrop' : !writable() || !latest.current.insert(item) ? 'blockedDrop' : '')
     }
-    document.addEventListener('dragenter', enter)
-    document.addEventListener('dragover', over)
-    document.addEventListener('dragleave', leave)
-    document.addEventListener('drop', drop)
+    window.addEventListener('dragenter', enter, true)
+    window.addEventListener('dragover', over, true)
+    window.addEventListener('dragleave', leave, true)
+    window.addEventListener('drop', drop, true)
     window.addEventListener('dragend', reset)
     window.addEventListener('blur', reset)
     return () => {
-      document.removeEventListener('dragenter', enter)
-      document.removeEventListener('dragover', over)
-      document.removeEventListener('dragleave', leave)
-      document.removeEventListener('drop', drop)
+      mountedDocks.delete(dock)
+      window.removeEventListener('dragenter', enter, true)
+      window.removeEventListener('dragover', over, true)
+      window.removeEventListener('dragleave', leave, true)
+      window.removeEventListener('drop', drop, true)
       window.removeEventListener('dragend', reset)
       window.removeEventListener('blur', reset)
     }
   }, [])
-  return <span ref={anchor} aria-label="Session and workspace references" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-    {error && <span role="status" style={{ position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, width: 240, padding: 10, borderRadius: 8, background: 'var(--dsw-alias-bg-base, Canvas)', color: 'var(--dsw-alias-label-primary, CanvasText)', boxShadow: '0 4px 16px #0002', zIndex: 25 }}>{error}</span>}
-    {active && createPortal(<div role="status" aria-label="引用拖放" style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', background: 'var(--dsw-alias-bg-mask-drop, #8883)', backdropFilter: 'blur(10px)', color: 'var(--dsw-alias-label-primary, CanvasText)', textAlign: 'center' }}>
-      <span aria-hidden="true" style={{ fontSize: 56, color: 'var(--dsw-alias-label-link, #3964fe)' }}>@</span>
-      <strong style={{ fontSize: 20, marginTop: 16 }}>{disabled || blocked ? '当前无法添加引用' : '松开以添加 workspace / session 引用'}</strong>
-      {!disabled && !blocked && <span style={{ fontSize: 14, marginTop: 16 }}>引用将加入当前输入框</span>}
-    </div>, document.body)}
+  return <span ref={anchor} aria-label={t('references')} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+    {active && <ReferenceDropOverlay blocked={disabled || blocked} t={t} />}
+    {error && <span role="status" style={{ position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, width: 240, padding: 10, borderRadius: 'var(--dsw-radius-md)', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)', border: '1px solid var(--dsw-alias-border-l1)', boxShadow: 'var(--dsw-elevation-soft)', zIndex: 25, pointerEvents: 'none' }}>{t(error)}</span>}
   </span>
 }

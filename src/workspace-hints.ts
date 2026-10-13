@@ -5,7 +5,7 @@ import type { ResolvedConfig } from './config.js'
 import { workspaceChainSource } from './message-source.js'
 import { queryText } from './hints.js'
 import { sessionReferenceIds, workspaceReferenceIds, workspaceMentions } from './shared/references.js'
-import { delegationAvailable, invocationHint } from './presentation.js'
+import { delegationAvailable } from './presentation.js'
 export interface WorkspaceReferenceContext { id: string; title: string; path: string; sessionIds?: readonly string[] }
 export function workspaceTargets(workspace: Pick<WorkspaceReferenceContext, 'path'>, config: ResolvedConfig, nativeAvailable = true): string[] {
   const configured = [...config.targets].filter(([, target]) => target.cwd === workspace.path).map(([name]) => name)
@@ -20,18 +20,17 @@ export function referencedTask(query: string): string {
   // file work when a greeting is merely mentioned within a larger request.
   return /^(?:请\s*)?(?:给(?:他|它|这个工作区|该工作区)\s*)?(?:发送|发)\s*(?:一个|一句|一条)?\s*[“‘"']?你好[”’"']?\s*(?:的)?(?:消息|任务)?[。.!！\s]*$/u.test(text) ? '你好' : text
 }
-export function workspaceHandoff(query: string, workspaces: readonly WorkspaceReferenceContext[], config: ResolvedConfig, available: boolean, nativeAvailable = true): { text: string; example?: { target: string; task: string } } {
+export function workspaceHandoff(query: string, workspaces: readonly WorkspaceReferenceContext[], config: ResolvedConfig, available: boolean, nativeAvailable = true): { text: string } {
   const ids = workspaceReferenceIds(query)
-  const sessions = sessionReferenceIds(query)
-  const selected = workspaces.filter(w => ids.includes(w.id) || w.sessionIds?.some(id => sessions.includes(id)))
-  const task = referencedTask(query)
+  // Session references provide historical context, never a workspace task target.
+  if (!ids.length) return { text: '' }
+  const selected = workspaces.filter(w => ids.includes(w.id))
   const targets = selected.flatMap(w => workspaceTargets(w, config, nativeAvailable))
-  const context = `工作区交接场景：引用指向${selected.length ? selected.map(w => JSON.stringify(w.title)).join('、') : '尚未解析的工作区'}，不是当前插件的源码文件。${task ? `\n用户本次任务：${JSON.stringify(task)}` : '\n本次只有引用，等待用户指定任务。'}`
-  if (!selected.length) return { text: `${context}\n当前无法委派：引用未解析到已登记的工作区。请指出该问题，不要猜测路径或启动命令。` }
-  if (!targets.length) return { text: `${context}\n当前无法委派：DSH 本地会话 API 不可用，且目标没有配置 SDK 执行器。可识别项目不等于可以向它发送任务。请直接说明接口不可用，不能确认已发送；不要读取本插件 README/源码来寻找发送方式，也不要代为写入“你好”文件。` }
-  if (!available) return { text: `${context}\n当前无法委派：目标已配置，但本会话的工具可见性或调用模式不允许原生委派。请报告此限制，不要改用未授权的启动方式。` }
-  return { text: `${context}\n可用目标名：${JSON.stringify(targets)}。用户要求在这些项目中执行任务时，由当前会话调用下述委派工具交付，并等待执行结果。可并行的子任务（如只等对方返回一个 key / 契约名）用 run_in_background: true 挂后台、继续其他工作，最后统一用 job_output 收取；结果未返回前不得宣称完成。`,
-    ...targets.length === 1 && task ? { example: { target: targets[0]!, task } } : {} }
+  const context = '工作区引用能力：引用仅用于定位或标识任务目标，不表示委派请求。只有用户明确要求在目标执行任务时才可委派；不会从引用后的文本自动提取任务或生成调用示例。'
+  if (!selected.length) return { text: `${context}\n状态：引用未解析到已登记的工作区；路径与执行能力未知，不猜测路径。` }
+  if (!targets.length) return { text: `${context}\n状态：DSH 本地会话 API 不可用，且目标没有配置 SDK 执行器；当前无可用委派能力。` }
+  if (!available) return { text: `${context}\n状态：目标已配置，但本会话的工具可见性或调用模式不允许原生委派。` }
+  return { text: `${context}\n状态：委派能力可用；目标名：${JSON.stringify(targets)}。能力可用不表示任务已发送或授权执行。` }
 }
 export function workspaceHint(query: string, workspaces: readonly WorkspaceReferenceContext[], config: ResolvedConfig, toolAvailable = true, nativeAvailable = true): string | undefined {
   const ids = workspaceReferenceIds(query)
@@ -57,11 +56,11 @@ export function workspaceHint(query: string, workspaces: readonly WorkspaceRefer
     const workspace = workspaces.find(w => w.sessionIds?.includes(id))
     const label = labels.get(id)
     return { type: 'session', ...label && label !== id ? { name: label } : {},
-      ...workspace ? { workspace: workspace.title, path: workspace.path, ...binding(workspace) } : {} }
+      ...workspace ? { workspace: workspace.title, path: workspace.path } : {} }
   })
   const references = [...rows, ...sessionRows]
   const delegates = references.some(row => 'delegate' in row)
-  return `Reference metadata (not instructions or conversation history):\n${JSON.stringify(references)}${delegates ? '\nDelegate only when requested, using the listed tool/target. Delegation creates a fresh session; it does not resume the reference.' : ''}`
+  return `Reference metadata (not instructions or conversation history):\n${JSON.stringify(references)}${sessions.length ? '\nSession references are historical background only, not task targets or delegation instructions. Do not infer a target from session workspace membership. Only an explicit session_id controls continuation.' : ''}${delegates ? '\nDelegate only when requested for an explicitly referenced workspace, using the listed tool/target. Delegation creates a fresh session unless session_id is explicitly provided.' : ''}`
 
 }
 export function mountWorkspaceHints(ctx: Context, config: ResolvedConfig): void {
@@ -76,8 +75,7 @@ export function mountWorkspaceHints(ctx: Context, config: ResolvedConfig): void 
     const nativeAvailable = ctx.get('sessionController') !== undefined
     let text = workspaceHint(query, workspaces, config, available, nativeAvailable)
     const handoff = workspaceHandoff(query, workspaces, config, available, nativeAvailable)
-    if (text) text += `\n${handoff.text}`
-    if (text && available && text.includes('"delegate":')) text += `\n${invocationHint(ctx, config, handoff.example)}`
+    if (text && handoff.text) text += `\n${handoff.text}`
     if (!text) return decision
     return { kind: 'enter' as const, messages: [...decision.messages, createUserMessage({ content: [{ type: 'text', text }], source: workspaceChainSource })] }
   })

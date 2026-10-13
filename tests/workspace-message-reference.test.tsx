@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { act, type ComponentProps } from 'react'
+import { installWorkspaceReferenceStyle, workspaceReferenceStyle } from '../src/client/workspace-reference-style.js'
 import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
 // The published primitives entry is a browser platform bundle, not a Node test module.
 // Keep this boundary mocked; host tests own the official icon artwork.
-const tooltip = vi.hoisted(() => ({ props: {} as { label: string; delayMs: number; portal: boolean; side: string } }))
+const tooltip = vi.hoisted(() => ({ props: {} as { label: string; delayMs: number; portal: boolean; side: string; maxWidth: number } }))
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   Tooltip: (props: typeof tooltip.props & { children: React.ReactNode }) => { tooltip.props = props; return props.children },
   ReferenceIconRegular: ({ kind, size }: { kind: string; size: number }) => <svg data-reference-kind={kind} width={size} height={size} aria-hidden="true" />,
@@ -14,6 +15,21 @@ import { workspaceReference, workspaceReferenceIds, workspaceMentions, reference
 import { referencedTask } from '../src/workspace-hints.js'
 import { selectWorkspaceReference, WorkspaceMessageReference } from '../src/client/WorkspaceMessageReference.js'
 
+it('uses composer semantic hover tokens on the whole inline chip without hover geometry changes', () => {
+  const css = workspaceReferenceStyle
+  const base = css.match(/\[data-ref-chip="workspace"\]\s*\{([^}]+)\}/u)![1]!
+  const hover = css.match(/\[data-ref-chip="workspace"\]:hover\s*\{([^}]+)\}/u)![1]!.trim()
+  expect(hover).toBe('background: var(--dsw-alias-state-business-tertiary);')
+  for (const declaration of ['display: inline;', 'padding: 0 4px;', 'border-radius: var(--dsw-radius-sm);', 'line-height: inherit;', 'vertical-align: baseline;', 'color: var(--dsw-alias-state-business-primary);', 'background: transparent;', 'white-space: inherit;', 'overflow-wrap: anywhere;', 'box-decoration-break: clone;', '-webkit-box-decoration-break: clone;']) expect(base).toContain(declaration)
+  expect(css).not.toMatch(/#[0-9a-f]{3,8}\b|inline-flex|nowrap/iu)
+})
+it('installs the exact CSS once per plugin effect and removes it on disposal', () => {
+  const dispose = installWorkspaceReferenceStyle()
+  const style = document.head.querySelector('[data-workspace-chain-reference-style]')!
+  expect(style.textContent).toBe(workspaceReferenceStyle)
+  dispose()
+  expect(document.head.querySelector('[data-workspace-chain-reference-style]')).toBeNull()
+})
 it('persists a Unicode display label separately from workspace identity and extracts the task', async () => {
   const label = '项目 / "测试" 🙂'
   const ref = referenceInsert({ kind: 'workspace', id: 'stable-id', label, description: '' }).ref
@@ -42,6 +58,12 @@ it('renders old IDs using the current workspace name and new references using th
     expect(tooltip.props.delayMs).toBe(500)
     expect(tooltip.props.portal).toBe(true)
     expect(tooltip.props.side).toBe('bottom')
+    expect(tooltip.props.maxWidth).toBe(480)
+    const chip = element.querySelector('[data-ref-chip="workspace"]')!
+    expect(chip.getAttribute('data-ref-chip')).toBe('workspace')
+    expect(chip.contains(element.querySelector('svg'))).toBe(true)
+    expect(chip.textContent).toBe('当前名称')
+    expect(chip.getAttribute('style')).toBeNull()
     expect(element.firstElementChild?.getAttribute('tabindex')).toBe('0')
     paint(workspaceReference('stable-id', '保存的名称'), [])
     expect(element.textContent).toBe('保存的名称')
@@ -50,7 +72,7 @@ it('renders old IDs using the current workspace name and new references using th
     expect(element.textContent).not.toContain('stable-id')
     expect(element.querySelector('button')).toBeNull()
     expect(element.querySelector('svg')?.getAttribute('data-reference-kind')).toBe('folder')
-    expect(element.firstElementChild?.getAttribute('style')).not.toContain('#4c8dff')
+    expect(element.firstElementChild?.getAttribute('style') ?? '').not.toContain('#4c8dff')
     paint('@workspace-id/stable-id', [], referenceEn)
     expect(element.textContent).toBe('Workspace unavailable')
     expect(tooltip.props.label).toBe('@workspace-id/stable-id')

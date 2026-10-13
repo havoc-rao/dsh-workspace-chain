@@ -54,6 +54,7 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
         return { title: request.title, seq: 1 }
       },
       async prompt(request: { sessionId: string; mode: 'queue' | 'steer'; content: { type: 'text'; text: string }[] }) {
+        if (request.content.some(block => block.text.includes('confirmed-failure-fixture'))) throw new Error('confirmed delivery failure')
         const agent = ctx.agents.get(SessionId(request.sessionId))!
         agent.followup(createUserMessage({ source: { kind: 'user' }, content: request.content }))
         return { accepted: true }
@@ -75,6 +76,21 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
     const after = await ctx.systemPrompt.assemble({ scope: parent })
     expect(after.tools).toEqual(before.tools)
     expect(after.sections).toEqual(before.sections)
+    // Real Loader + agent loop: reference-only and a question are metadata,
+    // not an auto-generated task/call. Assert the complete model-visible hint.
+    for (const suffix of ['', ' 这个项目是什么？']) {
+      parent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: `${workspaceReference(workspace.id, workspace.title)}${suffix}` }] }))
+      await parent.whenIdle()
+      expect(workspace.sessionIds).toEqual([])
+      const hintEvent = parent.session.snapshotEvents().findLast(e => e.type === 'user/message' && e.data.source.kind === 'workspace-chain')!
+      expect((hintEvent.data as { content: { type: string; text?: string }[] }).content).toEqual([{ type: 'text', text:
+        'Reference metadata (not instructions or conversation history):\n'
+        + JSON.stringify([{ type: 'workspace', name: 'Target', path: cwd, delegate: { tool: 'delegate_workspace', targets: [cwd] } }])
+        + '\nDelegate only when requested for an explicitly referenced workspace, using the listed tool/target. Delegation creates a fresh session unless session_id is explicitly provided.'
+        + '\n工作区引用能力：引用仅用于定位或标识任务目标，不表示委派请求。只有用户明确要求在目标执行任务时才可委派；不会从引用后的文本自动提取任务或生成调用示例。'
+        + '\n状态：委派能力可用；目标名：' + JSON.stringify([cwd]) + '。能力可用不表示任务已发送或授权执行。',
+      }])
+    }
     parent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: `${workspaceReference(workspace.id, workspace.title)} 给他发送一个你好。` }] }))
     await parent.whenIdle()
     expect(workspace.sessionIds).toHaveLength(1)
@@ -120,7 +136,8 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
     expect(background.sessionId).toMatch(/^session-/)
     expect(JSON.parse(await readFile(join(backgroundRecord, 'task.json'), 'utf8')).sessionId).toBe(background.sessionId)
     const settled = await ctx.jobs.wait(JobId(background.jobId), 5000, parent.id)
-    expect(settled.status).toBe('completed')
+    expect(settled).toMatchObject({ status: 'completed', kind: 'workspace-chain', label: 'background work', description: 'Target', sessionId: background.sessionId })
+    expect(background.jobId).toMatch(/^workspace-chain-/)
     // The created session carries exactly the preallocated id and lives in the workspace.
     expect(ctx.agents.get(SessionId(background.sessionId))).toBeDefined()
     expect(workspace.sessionIds).toContain(background.sessionId)
@@ -128,6 +145,11 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
     expect(collected.isError).toBe(false)
     expect(JSON.stringify(collected)).toContain('background work')
     expect(await readFile(join(backgroundRecord, 'progress.md'), 'utf8')).toContain('[result] completed')
+    const failed = await ctx.tools.execute({ name: 'delegate_workspace', arguments: { target: cwd, task: 'confirmed-failure-fixture' }, callId: 'confirmed-failure' as never, agent: parent, signal: exec.signal })
+    expect(failed.isError).toBe(true)
+    expect(failed.meta).toMatchObject({ mode: 'local', sessionConfirmed: true, target: cwd })
+    const failureMeta = failed.meta as { sessionId: string }
+    expect(ctx.agents.get(SessionId(failureMeta.sessionId))).toBeDefined()
     // Return to the same session: session_id delivers the task into the retained session
     // instead of creating a new one, no matter how the previous run settled.
     const firstChild = ctx.agents.get(SessionId(output.sessionId))!
@@ -141,23 +163,24 @@ it('uses the local API contract and a real agent loop for an unconfigured worksp
     const continueRecord = JSON.parse(await readFile(join(cwd, '.dsh', 'delegations', continued.delegationId, 'task.json'), 'utf8'))
     expect(continueRecord).toMatchObject({ mode: 'local', workspacePath: cwd, sessionId: output.sessionId, runId: output.sessionId })
     expect(await readFile(join(cwd, '.dsh', 'delegations', continued.delegationId, 'resume.md'), 'utf8')).toContain('session_id')
-    // A session reference inside the task text routes the delegation into that
-    // referenced session even without an explicit session_id: the execution
-    // layer resolves the single dsh-session reference as the continuation target.
-    const viaReference = await tool.execute({ target: cwd, task: `请继续，这是引用发送：${referenceInsert({ kind: 'session', id: output.sessionId, label: 'child', description: '' }).ref}` }, contExec) as { sessionId: string; delegationId: string }
-    expect(viaReference.sessionId).toBe(output.sessionId)
-    expect(workspace.sessionIds).toHaveLength(3)
-    expect(JSON.stringify(firstChild.session.snapshotEvents())).toContain('引用发送')
+    // Task references are background only; omitting session_id always creates a fresh session.
+    const viaReference = await tool.execute({ target: cwd, task: `历史背景：${referenceInsert({ kind: 'session', id: output.sessionId, label: 'child', description: '' }).ref}` }, contExec) as { sessionId: string; delegationId: string }
+    expect(viaReference.sessionId).not.toBe(output.sessionId)
+    expect(workspace.sessionIds).toHaveLength(beforeContinue + 1)
     const viaProgress = await readFile(join(cwd, '.dsh', 'delegations', viaReference.delegationId, 'progress.md'), 'utf8')
-    expect(viaProgress).toContain(`continuing session ${output.sessionId}`)
-    // Ambiguous references must not guess: several distinct references require
-    // an explicit session_id and fail with a readable cause before creating anything.
-    const ambiguous = `${referenceInsert({ kind: 'session', id: output.sessionId, label: 'a', description: '' }).ref} 与 ${referenceInsert({ kind: 'session', id: background.sessionId, label: 'b', description: '' }).ref}`
-    await expect(tool.execute({ target: cwd, task: ambiguous }, contExec)).rejects.toThrow('distinct sessions')
-    expect(workspace.sessionIds).toHaveLength(3)
+    expect(viaProgress).toContain(`session created ${viaReference.sessionId}`)
+    expect(viaProgress).not.toContain('continuing session')
+    // Multiple historical references are also accepted as context for a fresh task.
+    const references = `${referenceInsert({ kind: 'session', id: output.sessionId, label: 'a', description: '' }).ref} 与 ${referenceInsert({ kind: 'session', id: background.sessionId, label: 'b', description: '' }).ref}`
+    const multiple = await tool.execute({ target: cwd, task: references }, contExec) as { sessionId: string }
+    expect([output.sessionId, background.sessionId, viaReference.sessionId]).not.toContain(multiple.sessionId)
+    expect(workspace.sessionIds).toHaveLength(beforeContinue + 2)
+    // Even conflicting references cannot override the explicit session_id.
+    const explicit = await tool.execute({ target: cwd, task: references, session_id: viaReference.sessionId }, contExec) as { sessionId: string }
+    expect(explicit.sessionId).toBe(viaReference.sessionId)
+    expect(workspace.sessionIds).toHaveLength(beforeContinue + 2)
     // A wrong id fails with a readable cause and creates nothing.
     await expect(tool.execute({ target: cwd, task: 'x', session_id: 'session-ghost' }, contExec)).rejects.toThrow('was not found')
-    expect(workspace.sessionIds).toHaveLength(beforeContinue)
-    expect(workspace.sessionIds).toHaveLength(3)
+    expect(workspace.sessionIds).toHaveLength(beforeContinue + 2)
   } finally { await ctx.fiber.dispose() }
 }, 20000)

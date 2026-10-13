@@ -2,7 +2,7 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { IWorkspaces } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the SlotRegistry service merge (`ctx.slots`) into the
 // client Context, same as every other client plugin.
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -10,16 +10,26 @@ import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { CHANNEL, OWNER_ENDPOINT, isCatalog, isOwnerOfResult, type OwnerOfResult } from '../shared/catalog.js'
-import { DelegationRow } from './DelegationRow.js'
+import { DelegationRow, type DelegationInjected } from './DelegationRow.js'
+import { DelegationKind } from './DelegationKind.js'
+import type { IJobs } from '@deepseek-ai/dsh-api-job-controller/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
+import { DELEGATION_NS, delegationZh, delegationEn } from './delegation-locales.js'
 import { armToolviewSlot } from './toolview-slot.js'
 import { ReferenceDock } from './ReferenceDock.js'
-import { referenceInsert, type ReferenceItem } from '../shared/references.js'
+import type { ReferenceItem } from '../shared/references.js'
+import { insertInputReference } from './reference-insertion.js'
 import { WorkspaceMessageReference, selectWorkspaceReference } from './WorkspaceMessageReference.js'
 import { EscalationDelegation } from './EscalationDelegation.js'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { REFERENCE_NS, referenceZh, referenceEn } from './reference-locales.js'
-export const inject = ['connection', 'slots', 'locale']
-export function apply(ctx: ClientContext): void {
+import { installWorkspaceReferenceStyle } from './workspace-reference-style.js'
+export const inject = ['connection', 'slots', 'locale', 'jobs', 'uiWorkspace']
+// Host and browser compile in this repository, but their jobs services are
+// distinct. Keep the browser entry on the real client contract explicitly.
+export function apply(ctx: Omit<ClientContext, 'jobs'> & { jobs: IJobs }): void {
+  ctx.effect(installWorkspaceReferenceStyle, 'workspace-chain: message reference style')
+  ctx.effect(() => ctx.locale.register(DELEGATION_NS, { zh: delegationZh, en: delegationEn }), 'workspace-chain: delegation dictionaries')
   ctx.effect(() => ctx.locale.register(REFERENCE_NS, { zh: referenceZh, en: referenceEn }), 'workspace-chain: reference dictionaries')
   const connection = ctx.get('connection') as unknown as ConnectionHandle
   const load = async () => {
@@ -50,20 +60,14 @@ export function apply(ctx: ClientContext): void {
       }),
     ]
   }
-  // Input-area entry is drag-only: sidebar workspace/session rows drop into the
-  // composer through this slot's dock (validated by `references()`), which also
-  // owns the full-screen reference mask. The former `@` menu/button and hover
-  // previews were removed.
-  ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'workspace-chain-references', order: 30 },
-    (props: PropsRuntime<'conversation.input.left'>) => {
-      const input = props.useInput(state => state)
-      return <ReferenceDock items={references} disabled={input.phase !== 'plain'} insert={item => {
-        const sessions = ctx.get('sessions') as unknown as ISessions
-        const scope = sessions.scope(props.sessionId)
-        if (!scope) return false
-        const end = input.draft.length
-        return scope.bail(scope, 'slash/input-insert-reference', { reference: referenceInsert(item), span: { start: end, end, draftRev: input.draftRev } }) === true
-      }} />
+  // This slot owns reference drops only in its current composer/conversation.
+  // Capture the host's detect-coordinate selection and revision for every insert;
+  // clipboard draft length is not an editor offset when chips already exist.
+  ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'workspace-chain-references', order: 30, locale: REFERENCE_NS },
+    (props: PropsRuntime<'conversation.input.left'> & PropsLocale<typeof REFERENCE_NS>) => {
+      const phase = props.useInput(state => state.phase)
+      return <ReferenceDock items={references} sessionId={props.sessionId} t={props.t} disabled={phase !== 'plain'}
+        insert={item => insertInputReference(props.inputActions, item)} />
     }))
   // Keyed toolview ownership is async (the catalog RPC decides the wire tool
   // name), while DSH's keyed dispatch falls back to the generic card for
@@ -71,10 +75,20 @@ export function apply(ctx: ClientContext): void {
   // delegation row to the plain generic card for the whole app session, so
   // armToolviewSlot retries with bounded backoff and re-arms on every
   // connection reset (initial connect, host restart, reconnect).
+  ctx.slots.inject('conversation.session.jobs.kind', () => ctx.slots.register({
+    name: 'conversation.session.jobs.kind', key: 'workspace-chain', locale: DELEGATION_NS,
+  }, DelegationKind))
   ctx.slots.inject('tool.call.toolview', () => {
     const arm = armToolviewSlot({
       load,
-      register: toolName => ctx.slots.register({ name: 'tool.call.toolview', key: toolName }, DelegationRow),
+      register: toolName => ctx.slots.register({
+        name: 'tool.call.toolview', key: toolName, locale: DELEGATION_NS,
+        inject: (): DelegationInjected => ({
+          hooks: { delegationJobs: ctx.jobs.state },
+          watchRows: sessionId => ctx.jobs.watchRows(sessionId),
+          openSession: target => ctx.uiWorkspace.openSession(target),
+        }),
+      }, DelegationRow),
       onReset: listener => ctx.on('connection/reset', listener),
     })
     return () => { arm.dispose() }
