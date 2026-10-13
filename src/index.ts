@@ -1,5 +1,4 @@
 import type { Context } from '@deepseek-ai/cordis'
-import * as SdkProvider from '@deepseek-ai/dsh-subagent-dsh-sdk'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { resolveConfig, type Config } from './config.js'
 import { createDelegationTool } from './tool.js'
@@ -19,8 +18,14 @@ export async function apply(ctx: Context, input: Config): Promise<void> {
   const config = resolveConfig(input)
   mountCatalog(ctx, config)
   if (config.promptEnabled) mountWorkspaceHints(ctx, config)
+  // Local workspace delegation must not load the optional SDK backend: its
+  // version-specific subagent imports can fail before this plugin registers
+  // any tools on a newer host, even when no SDK targets are configured.
+  const SdkProvider = config.targets.size
+    ? await import('@deepseek-ai/dsh-subagent-dsh-sdk')
+    : undefined
   for (const target of config.targets.values()) {
-    await ctx.plugin(SdkProvider, {
+    await ctx.plugin(SdkProvider!, {
       providerName: target.providerName, profile: target.profile, patches: target.patches, dshHome: target.dshHome,
       cwd: target.cwd, env: target.env, provider: target.provider, model: target.model,
       ...target.dshBin === undefined ? {} : { dshBin: target.dshBin },

@@ -35,6 +35,12 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
 
 当前兼容基线已从 `0.1.7-rc.2` 升至 `0.2.1-alpha.1`，旧宿主不再属于本版本支持范围。升级时同步更新 peer、SDK、UI 类型和锁文件，不能只放宽 peer 范围。已通过类型检查、开发构建与 145 项自动化测试；这些检查不代表已重新挂载 profile 或完成真实页面验收。使用本仓库 link 的 profile 可在重启宿主后读取更新；打包安装的 profile 需要重新打包安装。
 
+### 本地 API 与 SDK backend 的加载隔离
+
+本地工作区委派（默认 `targets: {}`）不导入 `dsh-subagent-dsh-sdk`；仅配置显式 SDK targets 时才动态加载该 backend。否则旧 SDK provider 的顶层导入可能与较新宿主的 subagent 导出不兼容（例如缺少 `resolveChildCwd`），在插件注册工具之前就让整个入口导入失败。本地路径不应因未使用的 SDK backend 失效；显式 SDK 路径仍需 provider 与宿主版本匹配，加载失败会如实拒绝，不静默回退成本地执行。
+
+后端入口导入失败可能被 Node 模块缓存保留；重新构建客户端或刷新页面不能清除该缓存。修复后需重新加载后端模块或重启实际宿主，再确认 Loader 激活状态和模型工具列表。
+
 ### 本地新增 jobs 契约联调
 
 本次使用宿主新增 `JobView.description/sessionId`、`JobHandle.setSession` 和 `conversation.session.jobs.kind` slot；不支持通过可选方法或强转兼容旧 jobs 版本。jobs/jobs-local 的 overrides 以及客户端 job-controller/ui-workspace dev 依赖指向相邻宿主 checkout；类型解析只将新 jobs 与 ui-jobs slot 映射到宿主已构建的发布声明，并将 Cordis、SessionId 统一解析至现有插件依赖，避免混合类型品牌。宿主需先构建 jobs/jobs-local、api/job-controller、client/ui-workspace、client/ui-jobs 及 slots 声明；正式打包发布时应同步使用包含该契约的版本、移除本地 link/source mappings，而非直接上传带本地依赖的联调配置。
