@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36" fill="none">
+  <title>Workspace Chain — Clean Interlock</title>
+  <desc>Two interlocking capsule links. Transparent clearance follows the crossing link contour rather than a circular cutout.</desc>
+  <defs>
+    <clipPath id="top-crossing"><path d="M0 0h36v18H0z"/></clipPath>
+    <clipPath id="bottom-crossing"><path d="M0 18h36v18H0z"/></clipPath>
+    <mask id="purple-under" maskUnits="userSpaceOnUse" x="0" y="0" width="36" height="36" style="mask-type:luminance">
+      <path d="M0 0h36v36H0z" fill="white"/>
+      <rect x="12" y="12" width="20" height="12" rx="6" stroke="black" stroke-width="6" clip-path="url(#top-crossing)"/>
+    </mask>
+    <mask id="teal-under" maskUnits="userSpaceOnUse" x="0" y="0" width="36" height="36" style="mask-type:luminance">
+      <path d="M0 0h36v36H0z" fill="white"/>
+      <rect x="4" y="12" width="20" height="12" rx="6" stroke="black" stroke-width="6" clip-path="url(#bottom-crossing)"/>
+    </mask>
+  </defs>
+  <g transform="rotate(-45 18 18)" stroke-width="4.6">
+    <rect x="4" y="12" width="20" height="12" rx="6" stroke="#6366F1" mask="url(#purple-under)"/>
+    <rect x="12" y="12" width="20" height="12" rx="6" stroke="#14B8A6" mask="url(#teal-under)"/>
+  </g>
+</svg>

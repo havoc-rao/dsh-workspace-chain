@@ -18,7 +18,9 @@
       "default": "./lib/client.js"
     }
   },
+  "icon": "./icon.svg",
   "files": [
+    "icon.svg",
     "lib",
     "src/child.patch.yml",
     "cordis.patch.yml",

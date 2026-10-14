@@ -3,3 +3,4 @@ lib/
 *.tgz
 .env
 .pnpm-store/
+docs/x/
