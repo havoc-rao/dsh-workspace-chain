@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { REFERENCE_MIME, resolveDrop, type ReferenceItem } from '../shared/references.js'
 import type { ReferenceTranslate } from './reference-locales.js'
 import { ReferenceDropOverlay } from './ReferenceDropOverlay.js'
@@ -27,14 +28,17 @@ export function ReferenceDock({ items, insert, disabled = false, sessionId, t }:
   useEffect(() => {
     const dock = anchor.current!
     let depth = 0
-    const reset = () => { depth = 0; setActive(false) }
+    let showing = false
+    const reset = () => {
+      depth = 0
+      if (showing) { showing = false; setActive(false) }
+    }
     mountedDocks.set(dock, reset)
     const transferOf = (event: DragEvent) => event.dataTransfer?.types.includes(REFERENCE_MIME)
       && !event.dataTransfer.types.includes('Files') ? event.dataTransfer : undefined
     const owns = (event: DragEvent) => {
       const target = event.target instanceof Element ? event.target : null
       if (!target || target.closest('[role="treeitem"], [role="tree"], [data-dsh-enhanced-workspace="browser"]')) return false
-      if (!visible(dock)) return false
       // Core's resident ConversationContent publishes this real session marker.
       // A targeted visible occurrence wins; outside it, accept only when exactly
       // one visible dock exists, rather than guessing which split view is current.
@@ -56,12 +60,20 @@ export function ReferenceDock({ items, insert, disabled = false, sessionId, t }:
     }
     const over = (event: DragEvent) => {
       const transfer = transferOf(event)
-      if (!transfer || !owns(event)) { reset(); return }
-      claim(event); transfer.dropEffect = writable() ? 'copy' : 'none'; setBlocked(!writable()); setError(''); setActive(true)
+      if (!transfer || !owns(event)) { reset(); return false }
+      claim(event)
+      const canWrite = writable()
+      transfer.dropEffect = canWrite ? 'copy' : 'none'
+      if (!showing) {
+        showing = true
+        // Native drag events are not React discrete events. Commit the first
+        // mask now instead of waiting behind the sidebar's concurrent rerender.
+        flushSync(() => { setBlocked(!canWrite); setError(''); setActive(true) })
+      } else setBlocked(!canWrite)
+      return true
     }
     const enter = (event: DragEvent) => {
-      if (transferOf(event) && owns(event)) depth += 1
-      over(event)
+      if (over(event)) depth += 1
     }
     const leave = (event: DragEvent) => {
       if (!transferOf(event)) return

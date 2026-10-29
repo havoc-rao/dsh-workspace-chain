@@ -31,6 +31,20 @@ it('renders full-screen body portal and outside-conversation release inserts onc
     expect(drag('drop').defaultPrevented).toBe(true); expect(f.insert).toHaveBeenCalledTimes(1); expect(overlay()).toBeNull()
   } finally { f.clean() }
 })
+it('commits the first native drag mask before dispatch returns and scans visibility only once', () => {
+  const f = mount()
+  const styles = vi.spyOn(window, 'getComputedStyle')
+  try {
+    const event = new MouseEvent('dragenter', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', { value: { types: [REFERENCE_MIME], dropEffect: 'none' } })
+    document.body.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(overlay()).not.toBeNull()
+    let ancestors = 0
+    for (let node: HTMLElement | null = f.host.querySelector('span'); node; node = node.parentElement) ancestors++
+    expect(styles).toHaveBeenCalledTimes(ancestors)
+  } finally { styles.mockRestore(); f.clean() }
+})
 it('shows blocked overlay without description and clears on rejected or invalid drop', () => {
   const f = mount('s1', true)
   try {
