@@ -21,12 +21,60 @@ function fixture() {
     list: vi.fn(async () => ({ items: listed })),
     create: vi.fn(async (request: { sessionId?: string }) => ({ sessionId: request.sessionId ?? 'child' })),
     rename: vi.fn(async () => ({ title: 'pinned', seq: 1 })),
+    selectModel: vi.fn(async (_request: unknown) => ({})),
     prompt: vi.fn(async () => ({ accepted: true })),
     cancel: vi.fn(async () => ({ accepted: true })),
   }
   const ctx = { get: (name: string) => name === 'sessionController' ? controller as unknown as SessionController : { get: () => workspace }, agents: { get: () => child } } as unknown as Context
   return { ctx, workspace, parent, child, controller, listed }
 }
+it('selects an explicit model before prompting and does not switch an unspecified model', async () => {
+  const f = fixture()
+  const model = { provider: 'openai', model: 'gpt-6.1' }
+  const run = await startNativeRun(f.ctx, f.workspace, f.parent, 'task', new AbortController().signal, { model })
+  await run.dispose()
+  expect(f.controller.selectModel).toHaveBeenCalledWith({ sessionId: 'child', ...model })
+  expect(f.controller.selectModel.mock.invocationCallOrder[0]).toBeLessThan(f.controller.prompt.mock.invocationCallOrder[0]!)
+  f.controller.selectModel.mockClear()
+  await (await startNativeRun(f.ctx, f.workspace, f.parent, 'task', new AbortController().signal)).dispose()
+  expect(f.controller.selectModel).not.toHaveBeenCalled()
+})
+it('does not deliver a task if explicit model switching fails', async () => {
+  const f = fixture()
+  f.controller.selectModel.mockRejectedValue(new Error('model unavailable'))
+  const run = await startNativeRun(f.ctx, f.workspace, f.parent, 'task', new AbortController().signal, { model: { provider: 'openai', model: 'gpt-6.1' } })
+  expect(await run.result).toMatchObject({ stopReason: 'error', diagnostic: expect.stringContaining('model unavailable') })
+  expect(f.controller.prompt).not.toHaveBeenCalled()
+  await run.dispose()
+})
+it('waits for a running retained session to finish before switching its model', async () => {
+  const f = fixture()
+  f.listed.push({ sessionId: 'child', cwd: f.workspace.path, running: true })
+  let idle!: () => void
+  f.child.whenIdle.mockImplementationOnce(() => new Promise<void>(resolve => { idle = resolve }))
+  const run = await continueNativeRun(f.ctx, f.workspace, f.parent, 'child', 'task', new AbortController().signal, { model: { provider: 'openai', model: 'gpt-6.1' } })
+  expect(f.controller.selectModel).not.toHaveBeenCalled()
+  expect(f.controller.prompt).not.toHaveBeenCalled()
+  idle()
+  await run.dispose()
+  expect(f.controller.selectModel).toHaveBeenCalledOnce()
+  expect(f.controller.prompt).toHaveBeenCalledOnce()
+})
+it('never switches or delivers after cancellation while waiting for a retained session', async () => {
+  const f = fixture()
+  f.listed.push({ sessionId: 'child', cwd: f.workspace.path, running: true })
+  let idle!: () => void
+  const pending = new Promise<void>(resolve => { idle = resolve })
+  f.child.whenIdle.mockImplementation(() => pending)
+  const controller = new AbortController()
+  const run = await continueNativeRun(f.ctx, f.workspace, f.parent, 'child', 'task', controller.signal, { model: { provider: 'openai', model: 'gpt-6.1' } })
+  controller.abort()
+  idle()
+  expect(await run.result).toMatchObject({ stopReason: 'aborted' })
+  await run.dispose()
+  expect(f.controller.selectModel).not.toHaveBeenCalled()
+  expect(f.controller.prompt).not.toHaveBeenCalled()
+})
 it('passes the effective preset and workspace identity to create; a failed prompt is not success', async () => {
   const f = fixture()
   f.controller.prompt.mockRejectedValue(new Error('no model'))

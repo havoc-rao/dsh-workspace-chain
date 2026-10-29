@@ -16,12 +16,17 @@ function fixture() {
   return { ctx, register, plugin }
 }
 
+it('declares the host LLM service required by model discovery and route resolution', async () => {
+  const chain = await import('../src/index.js')
+  expect(chain.inject).toContain('llm')
+})
+
 it('imports and registers local delegation without loading an incompatible SDK backend', async () => {
   const chain = await import('../src/index.js')
   const { ctx, register, plugin } = fixture()
   await chain.apply(ctx, { targets: {} })
-  expect(register).toHaveBeenCalledOnce()
-  expect(register.mock.calls[0]![0].name).toBe('delegate_workspace')
+  expect(register).toHaveBeenCalledTimes(2)
+  expect(register.mock.calls.map(call => call[0].name)).toEqual(['delegate_workspace', 'list_workspace_models'])
   expect(plugin).not.toHaveBeenCalled()
 })
 

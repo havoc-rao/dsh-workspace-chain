@@ -4,6 +4,7 @@ import type { SubagentRun } from '@deepseek-ai/dsh-subagent'
 import type { JobOutcome } from '@deepseek-ai/dsh-jobs'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { resolveDelegationModel } from './model-selection.js'
 import { continueNativeRun, planSessionId, startNativeRun } from './native.js'
 import { checkDirectory, type ResolvedConfig } from './config.js'
 import { adaptiveDeadline, probeActivity } from './patience.js'
@@ -85,7 +86,7 @@ interface RunState {
 }
 
 /** Best-effort record creation: an unwritable workspace degrades to the pre-record behaviour, not to a failed delegation. */
-function createRecord(ctx: Context, config: ResolvedConfig, input: { mode: DelegationMode; target: string; workspacePath: string; parentSessionId: string; task: string; title?: string; timeoutMs: number; sessionId?: string; runId?: string }): DelegationRecord | undefined {
+function createRecord(ctx: Context, config: ResolvedConfig, input: { mode: DelegationMode; target: string; workspacePath: string; parentSessionId: string; task: string; title?: string; modelId?: string; providerId?: string; timeoutMs: number; sessionId?: string; runId?: string }): DelegationRecord | undefined {
   if (!config.delegationRecords) return undefined
   try {
     return writeDelegationRecord({
@@ -94,6 +95,8 @@ function createRecord(ctx: Context, config: ResolvedConfig, input: { mode: Deleg
       parentSessionId: input.parentSessionId, task: input.task, ...input.title !== undefined ? { title: input.title } : {}, timeoutMs: input.timeoutMs,
       ...input.sessionId !== undefined ? { sessionId: input.sessionId } : {},
       ...input.runId !== undefined ? { runId: input.runId } : {},
+      ...input.modelId ? { modelId: input.modelId } : {},
+      ...input.providerId ? { providerId: input.providerId } : {},
     })
   } catch (error) {
     logWarn(ctx, `delegation record unavailable (continuing without checkpoints): ${String(error)}`)
@@ -170,6 +173,8 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
     parameters: {
       target: { type: 'string', required: true, description: `Registered workspace absolute path, or an explicit SDK target name. Configured SDK targets: ${[...config.targets.keys()].join(', ')}.` },
       task: { type: 'string', required: true, description: 'Standalone task including context, files, goals and acceptance criteria. The target is a fresh session with no knowledge of this conversation.' },
+      model_id: { type: 'string', description: 'Optional exact model ID from list_workspace_models. Omit or leave empty to keep the default (or a resumed session’s current model). When the user requests a model such as gpt-6.1, first list models and pass the returned exact ID, never guess. Local sessions switch before task delivery; SDK targets receive a per-run route override. The host selectModel API also saves the host default.' },
+      provider_id: { type: 'string', description: 'Optional exact LLM provider ID from list_workspace_models, used to disambiguate model_id advertised by multiple providers. Requires a non-empty model_id; omit or leave empty for automatic unique matching.' },
       run_in_background: { type: 'boolean', description: 'Return a job id immediately; collect with job_output (wait: true to block up to the host wait cap) and cancel with job_kill. Default false: wait for the final output. Prefer true for tasks that can run in parallel with your remaining work; the foreground wait blocks until settlement or timeout.' },
       timeout_ms: { type: 'number', description: 'Override the configured defaultTimeoutMs for this call (positive integer ms). The target is cancelled only after the activity check: while it keeps producing, the wait extends by timeoutExtensionMs per round (maxTimeoutExtensions rounds); timeout is declared after a full silent extension window. On timeout / cancellation the delegation record explains how to resume, and the session stays open in the host.' },
       title: { type: 'string', description: 'Optional pinned title for the created session (local path only, requires host sessions.rename). Defaults to `<project>/<task summary>`, e.g. `dsh-remote/改造 cordis 配置`, so the workspace session list shows the concrete task.' },
@@ -201,6 +206,12 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
       const workspace = !target ? ctx.get('workspaceRegistry')?.list().find(w => w.path === args.target) : undefined
       if (!target && !workspace) throw new Error(`Unknown workspace target ${JSON.stringify(args.target)}. Available targets: ${[...config.targets.keys()].join(', ')}`)
       if (args.session_id !== undefined && (typeof args.session_id !== 'string' || !args.session_id.trim())) throw new TypeError('session_id must be a non-empty string')
+      for (const key of ['model_id', 'provider_id'] as const) {
+        if (args[key] !== undefined && typeof args[key] !== 'string') throw new TypeError(`${key} must be a string`)
+      }
+      const modelId = args.model_id?.trim() || undefined
+      const providerId = args.provider_id?.trim() || undefined
+      if (providerId && !modelId) throw new TypeError('provider_id requires a non-empty model_id')
       const explicit = typeof args.session_id === 'string' ? args.session_id.trim() : undefined
       if (explicit && target) throw new Error('session_id requires a local workspace target (SDK runs have no re-entrant session id)')
       if (!args.task.trim()) throw new Error('task must not be empty')
@@ -223,14 +234,20 @@ export function createDelegationTool(ctx: Context, config: ResolvedConfig) {
       // while the session runs, and after a timeout/failure it can pass it back
       // as session_id to return to the same session.
       const planned = !target ? SessionId(continuing ?? planSessionId()) : undefined
-      const record = createRecord(ctx, config, { mode, target: args.target, workspacePath, parentSessionId: parent.id, task: args.task, title, timeoutMs, ...planned !== undefined ? { sessionId: planned } : {} })
+      const record = createRecord(ctx, config, { mode, target: args.target, workspacePath, parentSessionId: parent.id, task: args.task, title, modelId, providerId, timeoutMs, ...planned !== undefined ? { sessionId: planned } : {} })
       if (planned !== undefined && !continuing) appendProgress(record, `[start] session planned ${planned}`)
       const request = { parent, label: `Workspace: ${args.target}`, prompt: [{ type: 'text' as const, text: composeTask(args.task, record) }] }
-      const start = (signal: AbortSignal) => target
-        ? ctx.subagents.start(target.providerName, { ...request, signal })
-        : continuing
-          ? continueNativeRun(ctx, workspace!, parent, continuing, request.prompt[0]!.text, signal, { progress: line => appendProgress(record, `[start] ${line}`) })
-          : startNativeRun(ctx, workspace!, parent, request.prompt[0]!.text, signal, { progress: line => appendProgress(record, `[start] ${line}`), ...config.pinnedTitles ? { title } : {}, ...planned !== undefined ? { sessionId: planned } : {} })
+      const start = async (signal: AbortSignal) => {
+        const model = modelId ? await resolveDelegationModel(ctx, modelId, providerId) : undefined
+        signal.throwIfAborted()
+        if (model) appendProgress(record, `[start] model resolved ${model.provider}/${model.model}`)
+        const hooks = { progress: (line: string) => appendProgress(record, `[start] ${line}`), ...model ? { model } : {} }
+        return target
+          ? ctx.subagents.start(target.providerName, { ...request, signal, ...model ? { agentOptions: model } : {} })
+          : continuing
+            ? continueNativeRun(ctx, workspace!, parent, continuing, request.prompt[0]!.text, signal, hooks)
+            : startNativeRun(ctx, workspace!, parent, request.prompt[0]!.text, signal, { ...hooks, ...config.pinnedTitles ? { title } : {}, ...planned !== undefined ? { sessionId: planned } : {} })
+      }
       const identity = (run: SubagentRun) => {
         updateSessionIdentity(record, { ...mode === 'local' ? { sessionId: run.id } : {}, runId: run.id })
         if (mode === 'sdk') appendProgress(record, `[start] subagent created ${run.id} (SDK run id)`)

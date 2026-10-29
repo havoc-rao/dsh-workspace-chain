@@ -56,9 +56,20 @@ dsh plugin --profile <你的配置> add file:/absolute/path/dsh-workspace-chain-
 
 `@`/拖放引用 → 后续消息披露 `delegate_workspace` → `sessions.create` → `sessions.prompt` → `agent.whenIdle()` → 核验 turn 结果 → 回传当前会话。只接收注册表中的精确工作区路径，不创建任意目录。仅引用不执行。
 
-宿主拥有新会话及其持久化生命周期；任务结束后保留会话，可从工作区列表打开并继续。**会话标题固定**：`sessions.create` 不支持 title 字段，但宿主提供 `sessions.rename`——插件在创建后立即调用它把标题固定为**任务摘要**（任务首行去格式后截断 40 字符，如 `改造 cordis.patch.yml 配置…`），让工作区会话列表直接显示"这个会话在做什么具体任务"；会话已在目标工作区分组下，标题不重复工作区名。想要 `类别/任务` 形式（如 `绘画/画一只猫`）时，在调用中显式传 `title` 即可完全自定义。`pinnedTitles: false` 可关闭（标题回退为宿主自动生成）。rename 事件不开启 turn、不清除 blank 标记；老宿主无 `rename` 或标题被拒时只记录 progress 行，不影响委派。取消/超时调用 `sessions.cancel`，失败和部分输出如实回传。插件不调用 `selectModel`，避免该接口连带修改宿主全局默认模型。当前会话的有效 preset 通过 `sessions.list` 读取。递归委派最多四层。
+宿主拥有新会话及其持久化生命周期；任务结束后保留会话，可从工作区列表打开并继续。**会话标题固定**：`sessions.create` 不支持 title 字段，但宿主提供 `sessions.rename`——插件在创建后立即调用它把标题固定为**任务摘要**（任务首行去格式后截断 40 字符，如 `改造 cordis.patch.yml 配置…`），让工作区会话列表直接显示"这个会话在做什么具体任务"；会话已在目标工作区分组下，标题不重复工作区名。想要 `类别/任务` 形式（如 `绘画/画一只猫`）时，在调用中显式传 `title` 即可完全自定义。`pinnedTitles: false` 可关闭（标题回退为宿主自动生成）。rename 事件不开启 turn、不清除 blank 标记；老宿主无 `rename` 或标题被拒时只记录 progress 行，不影响委派。取消/超时调用 `sessions.cancel`，失败和部分输出如实回传。未指定模型时插件不调用 `selectModel`；指定模型时在任务交付前调用它，**该宿主接口同时会保存宿主全局默认模型**。当前会话的有效 preset 从父会话 header 读取。递归委派最多四层。
 
 **会话 ID 创建即得，可随时回到同一会话**：本地委派的会话 ID 由插件在调用入口**预分配**（`session-<uuid>`，宿主 `sessions.create` 契约支持显式 ID 且重试同名同工作区返回同一会话）——后台 job 的初始响应与委派记录在**任务尚未启动**时就携带 `sessionId`，进度行 `session created <id>` 确认会话落地；预分配不代表会话已创建，只有成功取得本地 `start` 返回值后才发布可导航的确认身份（旧宿主不满足当前契约时如实失败，不以预分配 ID 启用导航）。因此上一会话还在运行、刚刚创建、或已经超时/失败，父侧都持有它的 ID 与元数据（`delegationId`、进度/任务书/resume 路径）。要继续它时，把该 ID 作为 **`session_id`** 参数再次调用 `delegate_workspace`：任务直接送进**同一会话**（宿主幂等 adopt/resume，保留原上下文、preset 与标题，不新建会话）；会话仍在运行则消息排队等它空闲。这是重新委派的默认推荐路径——新开会话只会在目标跨会话上下文确实缺失时使用。**续聊必须显式选择**：只有 `session_id` 参数决定回到哪个保留会话。任务文本中的一个或多个 `@[label](dsh-session:…)` 引用仅为历史背景，不自动选择工作区或发送目标；未传 `session_id` 时始终新建会话。本地和 SDK 任务都可携带会话引用作为背景，SDK 仍不支持显式 `session_id`。职责分层为：**引用提供历史信息 → 模型根据用户意图显式选择 target、session_id 与任务 → 执行层仅依据 session_id 判定新建或续聊**。
+
+### 按次指定模型
+
+`delegate_workspace` 新增可选 `model_id`、`provider_id`，旧调用保持不变：
+
+- 用户未指定模型：省略或传空字符串 `model_id`，新会话使用宿主默认，续聊保持目标会话当前模型；SDK 保持 target 配置。
+- 用户要求例如 gpt-6.1：先调用 `list_workspace_models({})` 获取模型列表（或用 `provider_id` 限定 provider），从返回的 `models[].id` 选择精确 ID，不把展示名或猜测别名直接传入。
+- 再调用 `delegate_workspace({ target, task, model_id: "<返回的模型 ID>", provider_id: "<返回的 provider ID>" })`。模型唯一时可省略 provider；同 ID 跨 provider 时必须指定。provider 不能单独指定。
+- 本地新建／续聊均在切换成功后交付任务；运行中的续聊先等待当前工作结束，避免中途换模型。未知模型、歧义、查询或切换失败不会静默退回默认，也不会交付任务。**宿主 `selectModel` 同时保存宿主默认值，这是当前正式接口的副作用。**
+- SDK 将精确路由作为本次 `agentOptions` 传给 backend，不修改 target 配置；模型列表来自当前宿主，子 profile 也必须具备该 provider／模型和凭据，否则 SDK 如实失败。
+- 显式模型参数写入委派记录和恢复示例，实际解析／选择路由写入进度。
 
 ### 引用语义升级说明
 

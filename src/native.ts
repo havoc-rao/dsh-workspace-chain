@@ -17,6 +17,8 @@ export interface NativeRunHooks {
   title?: string
   /** Preallocated host session id; `sessionController.create` adopts it (`session-<uuid>`). */
   sessionId?: SessionId
+  /** Exact catalog route; selected before admitting the delegated task. */
+  model?: { provider: string; model: string }
 }
 
 /**
@@ -79,7 +81,7 @@ export async function startNativeRun(ctx: Context, workspace: Workspace, parent:
   const child = ctx.agents.get(sessionId)
   if (!child) throw new Error(`DSH created session ${sessionId} without a live agent`)
   depths.set(child, (depths.get(parent) ?? 0) + 1)
-  const result = driveSession(api, child, sessionId, task, signal, progress)
+  const result = driveSession(api, child, sessionId, task, signal, progress, hooks?.model)
   return { id: sessionId, localAgent: child, result,
     // The host owns this session. Keep its log, workspace membership and live continuation.
     async dispose() { await result },
@@ -121,7 +123,7 @@ export async function continueNativeRun(ctx: Context, workspace: Workspace, pare
   const child = ctx.agents.get(id)
   if (!child) throw new Error(`DSH session ${id} was not resumed into a live agent`)
   depths.set(child, (depths.get(parent) ?? 0) + 1)
-  const result = driveSession(api, child, id, task, signal, progress)
+  const result = driveSession(api, child, id, task, signal, progress, hooks?.model)
   return { id, localAgent: child, result,
     // Same retention contract as a fresh session: the host owns it.
     async dispose() { await result },
@@ -129,7 +131,7 @@ export async function continueNativeRun(ctx: Context, workspace: Workspace, pare
 }
 
 /** Deliver the task into an adopted session, wait for quiescence and fold the turn result. */
-function driveSession(api: SessionController, child: Agent, sessionId: SessionId, task: string, signal: AbortSignal, progress?: (line: string) => void): Promise<SubagentResult> {
+function driveSession(api: SessionController, child: Agent, sessionId: SessionId, task: string, signal: AbortSignal, progress?: (line: string) => void, model?: { provider: string; model: string }): Promise<SubagentResult> {
   const events = () => sessionEvents(child.session)
   let cancellation: Promise<void> | undefined
   const cancel = () => {
@@ -143,6 +145,20 @@ function driveSession(api: SessionController, child: Agent, sessionId: SessionId
   return (async () => {
     try {
       signal.throwIfAborted()
+      if (model) {
+        // A resumed session may still be running. Do not change its route mid-task.
+        // Race idle against cancellation so a timed-out continuation cannot switch later.
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => reject(signal.reason)
+          signal.addEventListener('abort', abort, { once: true })
+          if (signal.aborted) abort()
+          void child.whenIdle().then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+        })
+        signal.throwIfAborted()
+        await api.selectModel({ sessionId, ...model })
+        progress?.(`model selected ${model.provider}/${model.model}`)
+        signal.throwIfAborted()
+      }
       // A fresh identity per delivery; the host persists it on the accepted user message.
       const requestId = randomUUID() as SessionRequestId
       // Two text parts keep a slash-prefixed task from being interpreted as a UI command.

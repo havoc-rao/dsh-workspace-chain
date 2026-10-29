@@ -43,6 +43,8 @@ export interface DelegationRecord {
   task: string
   /** Pinned session title (`<project>/<task summary>` by default, or the caller's explicit title). */
   title?: string
+  modelId?: string
+  providerId?: string
   timeoutMs?: number
   sessionId?: string
   runId?: string
@@ -64,6 +66,8 @@ export interface WriteDelegationRecordInput {
   createdAt: string
   task: string
   title?: string
+  modelId?: string
+  providerId?: string
   timeoutMs?: number
   sessionId?: string
   runId?: string
@@ -149,6 +153,8 @@ function writeTaskMarkdown(record: DelegationRecord): void {
     `| 父会话 | \`${record.parentSessionId}\` |`,
     `| 创建时间 | ${record.createdAt} |`,
     ...(record.title ? [`| 任务标题 | ${record.title} |`] : []),
+    ...(record.modelId ? [`| 模型 ID | \`${record.modelId}\` |`] : []),
+    ...(record.providerId ? [`| Provider ID | \`${record.providerId}\` |`] : []),
     `| 超时 | ${record.timeoutMs ?? '-'} ms |`,
     ...(record.sessionId ? [`| 目标会话 | \`${record.sessionId}\` |`] : []),
     ...(record.runId ? [`| 运行 ID | \`${record.runId}\` |`] : []),
@@ -217,6 +223,8 @@ function writeResumeNote(record: DelegationRecord, status: string): void {
     name: 'delegate_workspace',
     arguments: {
       target: record.target,
+      ...record.modelId ? { model_id: record.modelId } : {},
+      ...record.providerId ? { provider_id: record.providerId } : {},
       ...session !== undefined ? { session_id: session } : {},
       task: session !== undefined
         ? `续跑委派 ${record.delegationId}：本会话就是原任务会话（session_id 已回到同一会话），阅读进度 ${record.progressPath} 与任务书 ${record.taskPath}，检查现场（git status/diff、生成产物），确定未完成步骤后继续，完成验收标准后报告。`

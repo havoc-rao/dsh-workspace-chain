@@ -45,6 +45,26 @@ describe('delegation tool', () => {
     await expect(f.tool.execute({ target: 'b', task: 'x' }, f.exec)).rejects.toThrow()
     expect(f.start).not.toHaveBeenCalled()
   })
+  it('keeps empty model selection on defaults and rejects a provider without a model', async () => {
+    const f = fixture()
+    await f.tool.execute({ target: 'b', task: 'x', model_id: ' ', provider_id: '' }, f.exec)
+    expect(f.start).toHaveBeenCalledWith(expect.anything(), expect.not.objectContaining({ agentOptions: expect.anything() }))
+    await expect(f.tool.execute({ target: 'b', task: 'x', provider_id: 'openai' }, f.exec)).rejects.toThrow('requires a non-empty model_id')
+  })
+  it('resolves explicit models into SDK route overrides and durable task records', async () => {
+    const f = fixture()
+    Object.assign(f.ctx, { llm: { listProviders: () => [{ id: 'openai', name: 'OpenAI' }], listModels: async () => [{ id: 'gpt-6.1', name: 'GPT' }] } })
+    const result = await f.tool.execute({ target: 'b', task: 'x', model_id: 'gpt-6.1', provider_id: 'openai' }, f.exec) as { checkpointPath: string }
+    expect(f.start).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentOptions: { provider: 'openai', model: 'gpt-6.1' } }))
+    expect(JSON.parse(readFileSync(join(dirname(result.checkpointPath), 'task.json'), 'utf8'))).toMatchObject({ modelId: 'gpt-6.1', providerId: 'openai' })
+    expect(readFileSync(join(dirname(result.checkpointPath), 'resume.md'), 'utf8')).toContain('"model_id": "gpt-6.1"')
+  })
+  it('does not start a run when an explicit model cannot be resolved', async () => {
+    const f = fixture()
+    Object.assign(f.ctx, { llm: { listProviders: () => [] } })
+    await expect(f.tool.execute({ target: 'b', task: 'x', model_id: 'unknown' }, f.exec)).rejects.toThrow('Unknown model_id')
+    expect(f.start).not.toHaveBeenCalled()
+  })
   it('writes a task book, delivers the checkpoint envelope and disposes after foreground completion', async () => {
     const f = fixture()
     const result = await f.tool.execute({ target: 'b', task: 'Implement API' }, f.exec) as { kind: string; output: string; runId: string; delegationId: string; checkpointPath: string }

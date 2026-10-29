@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import { resolveConfig, type Config } from './config.js'
 import { createDelegationTool } from './tool.js'
+import { createDelegationModelsTool } from './model-selection.js'
 import { mountHints } from './hints.js'
 import { mountCatalog } from './catalog.js'
 import { mountDenialHints } from './denial-hint.js'
@@ -13,7 +14,9 @@ export { classifyDelegation, composeTask, newDelegationId, writeDelegationRecord
 export type { DelegationRecord, DelegationStatus, DelegationMode, DelegationDiagnostic, ClassificationInput } from './delegation-record.js'
 export { DelegationFailure } from './tool.js'
 export const name = 'workspace-chain'
-export const inject = ['agents', 'tools', 'subagents', 'systemPrompt']
+// Model discovery and explicit delegation routing share the host LLM registry.
+// A type-only import does not grant access to this Cordis service at runtime.
+export const inject = ['agents', 'tools', 'subagents', 'systemPrompt', 'llm']
 export async function apply(ctx: Context, input: Config): Promise<void> {
   const config = resolveConfig(input)
   mountCatalog(ctx, config)
@@ -33,6 +36,7 @@ export async function apply(ctx: Context, input: Config): Promise<void> {
     })
   }
   ctx.tools.register(createDelegationTool(ctx, config))
+  ctx.tools.register(createDelegationModelsTool(ctx))
   mountPresentation(ctx, config)
   mountDenialHints(ctx, config)
   if (config.promptEnabled) mountHints(ctx, config)
